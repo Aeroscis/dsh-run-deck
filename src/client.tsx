@@ -156,6 +156,54 @@ const EN: Record<string, string> = {
 
 /* ─────────────────────────── 样式 ─────────────────────────── */
 
+/**
+ * **抬升宿主 `composerSeat` 的那一条规则**（2026-10-13 修 "⚙ 面板右下角被宿主的
+ * 「回到底部」圆钮盖住"）。
+ *
+ * ## 根因（全部是从安装包里读出来的字面事实，不是推断）
+ *
+ * 1. 我们这一行住在宿主的 composerSeat 里（实测祖先链：
+ *    `__ru_host → ank0OG_composerStack → … → ank0OG_composerSeat`，见 geometry 日志）。
+ * 2. 宿主 `@deepseek-ai/dsh-client-ui-conversation/ConversationRoot.module.css`：
+ *    ```css
+ *    .ank0OG_root[data-phase=active] .ank0OG_composerSeat,
+ *    .ank0OG_embeddedBody[data-content-phase=active] .ank0OG_composerSeat{
+ *      z-index:7; position:sticky; bottom:0; …}
+ *    ```
+ *    `position:sticky` + `z-index:7` = **一个层叠上下文**（特异性 (0,3,0)）。
+ * 3. 宿主 `@deepseek-ai/dsh-client-ui-chat/ChatView.module.css`：
+ *    `.X6jxGq_toBottomSlot{z-index:8; … position:absolute/sticky}` —— 「回到底部」
+ *    圆钮的槽位是 seat 的**兄弟子树**，在**父上下文**里以 8 压住整个 seat 子树。
+ * 4. 于是 `.__ru_pop{z-index:10}` 是**seat 上下文内部的 10**：层叠上下文是硬边界，
+ *    后代再高的 z-index 也出不去 —— 只要 seat 自己是 7，弹层就永远被 8 压住。
+ *    把弹层自己的 z-index 从 10 改成 20/999 一点用都没有（这就是"为什么之前没做"）。
+ *
+ * ## 修法：照抄宿主自己的做法
+ *
+ * 宿主遇到**同一个问题**（composer 里的 `@` 引用菜单同样被那个圆钮压住）时，
+ * 用的就是这一招 —— `ConversationRoot.module.css` 里紧跟其后的一条：
+ * ```css
+ * .ank0OG_root[data-phase=active] .ank0OG_composerSeat:has([data-trigger-menu]){z-index:9}
+ * ```
+ * 即"composer 里有浮层打开时，把 seat 整体抬到 9（> 8）"。我们在自己的弹层打开
+ * 期间做同一件事，只是**用我们自己的选择器**而不是冒充宿主的 `data-trigger-menu`。
+ *
+ * ## 两个细节是刻意的
+ *
+ * - 选择器写成 **(0,4,0)** 特异性：`[data-composer-seat]` + `[data-conversation-region="composer"]`
+ *   （两个属性，宿主 JSX 里就写在同一层 div 上）各算一个，`:has(.__ru_host .__ru_pop)`
+ *   的参数是 (0,2,0) → 合计 (0,4,0) > 宿主那条 (0,3,0)。少写一个属性就变成 (0,3,0)，
+ *   与宿主打平、只剩源码顺序决胜（我们的 style 标签是插件后插的，顺序不可靠）——
+ *   `scripts/smoke-client.mjs` 里有专门算特异性的护栏盯着这件事。
+ * - 只在**弹层打开时**抬升（`:has`），不改宿主的常驻布局。
+ *
+ * 这条规则**单独拎成一个常量**：`probeStacking()` 的 A/B 要把它的文本精确摘掉
+ * 再装回去，用来在同一帧里量出"有它/没它"的命中顺序差。
+ */
+const STACK_LIFT_RULE =
+  '[data-composer-seat][data-conversation-region="composer"]:has(.__ru_host .__ru_pop),' +
+  '[data-composer-seat][data-conversation-region="composer"]:has(.__ru_host .__ru_menu){z-index:9}';
+
 const CSS = [
   // 我们挂在 `conversation.input.dock` 里——宿主由 `ank0OG_composerStack`
   // （flex column + gap 6px）把这一列排出来，每个条目就是一个 flex 子项。
@@ -204,7 +252,9 @@ const CSS = [
   '@keyframes __ru_pulse{0%,100%{opacity:1}50%{opacity:.35}}',
   '.__ru_grow{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden}',
   '.__ru_tail{flex:none;display:flex;align-items:center;gap:6px}',
-  // 弹出面板 / 溢出菜单：锚在条的上方
+  // 弹出面板 / 溢出菜单：锚在条的上方。
+  // ⚠️ 这里的 z-index 只是**我们这条 host 上下文内部**的顺序，跨上下文（比如压过宿主的
+  // 「回到底部」圆钮）靠的是 `STACK_LIFT_RULE` —— 把弹层自己的 z-index 调大是没用的。
   '.__ru_pop{position:absolute;z-index:10;bottom:calc(100% + 8px);left:0;right:0;box-sizing:border-box;max-height:min(70vh,460px);overflow:auto;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 40px rgba(0,0,0,.28);color:var(--dsw-alias-label-primary);font-size:13px}',
   '.__ru_popTitle{margin:0 0 4px;font-size:14px;font-weight:600}',
   '.__ru_popHint{margin:0 0 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
@@ -232,6 +282,8 @@ const CSS = [
   '.__ru_optionOn{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-interactive-bg-active)}',
   '.__ru_error{margin:0 0 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary)}',
   '.__ru_menu{position:absolute;z-index:11;bottom:calc(100% + 8px);left:0;min-width:180px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 40px rgba(0,0,0,.28)}',
+  // 弹层打开期间把宿主的 composerSeat 抬到「回到底部」圆钮之上（根因见 STACK_LIFT_RULE）。
+  STACK_LIFT_RULE,
   '.__ru_menuItem{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:none;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;text-align:left;cursor:pointer}',
   '.__ru_menuItem:hover{background:var(--dsw-alias-interactive-bg-hover)}',
 ].join('');
@@ -490,6 +542,191 @@ function effectiveRows(container: Element): Array<{
   return out;
 }
 
+/* ────────────── 层叠诊断：我们的弹层 vs 宿主「回到底部」圆钮 ────────────── */
+
+/** 元素的可读名字（CSS Module 的哈希前缀照抄，便于在日志里对照宿主自己的类名）。 */
+function classNameOf(element: Element): string {
+  if (typeof element.className === 'string' && element.className.length > 0) {
+    return element.className.split(' ')[0] ?? element.tagName;
+  }
+  return element.tagName;
+}
+
+/**
+ * 一个元素在层叠里的关键事实：`position` / `z-index`，以及**到底哪些属性真的新建了
+ * 层叠上下文**。后者是关键——"谁把谁关在自己的上下文里"这件事，光看 z-index 看不出来
+ * （`container-type` 的布局包含、`opacity`、`transform` 都会偷偷新建上下文）。
+ */
+function stackingFacts(element: Element): string {
+  const style = getComputedStyle(element);
+  const marks: string[] = [];
+  if (style.position !== 'static' && style.zIndex !== 'auto') marks.push('positioned+z');
+  if (style.opacity !== '1') marks.push(`opacity:${style.opacity}`);
+  if (style.transform !== 'none') marks.push('transform');
+  if (style.filter !== 'none') marks.push('filter');
+  if (style.backdropFilter !== 'none') marks.push('backdrop-filter');
+  if (style.isolation === 'isolate') marks.push('isolation');
+  if (style.mixBlendMode !== 'normal') marks.push('blend');
+  if (style.willChange !== 'auto') marks.push(`will-change:${style.willChange}`);
+  if (style.contain !== 'none') marks.push(`contain:${style.contain}`);
+  if (style.containerType !== 'normal') marks.push(`container-type:${style.containerType}`);
+  return (
+    `${classNameOf(element)}{pos:${style.position},z:${style.zIndex}` +
+    `${marks.length > 0 ? `,上下文:${marks.join('+')}` : ',不新建上下文'}}`
+  );
+}
+
+/**
+ * 宿主那个「回到底部」圆钮。
+ *
+ * CSS Module 只哈希本地名前面的那段（`X6jxGq_toBottom`），本地名本身跟着
+ * `ChatView.module.css` 的 key 走、跨版本稳定，所以按**后缀**找；而且限定
+ * `button` —— 槽位 `..._toBottomSlot` 是个 `div`，不会被选中。
+ * 这是纯诊断：找不到就返回 null，不影响任何业务。
+ */
+function toBottomButton(): Element | null {
+  return document.querySelector('button[class*="toBottom"]');
+}
+
+/** 一次命中测试：测的点 + 该点上的命中序（上→下）。 */
+interface HitStack {
+  at: [number, number];
+  names: string[];
+}
+
+/** `probeStacking()` 的结论（结构化，便于进日志指纹）。 */
+interface StackProbeReport {
+  popupOpen: boolean;
+  seat: string | null;
+  button: {
+    what: string;
+    rect: ReturnType<typeof rectOf>;
+    /** 圆钮外面那个槽位（`X6jxGq_toBottomSlot`）——z-index:8 挂在它身上，不是按钮自己。 */
+    slot: string | null;
+  } | null;
+  popup: { what: string; rect: ReturnType<typeof rectOf> } | null;
+  probe: {
+    rect: ReturnType<typeof rectOf>;
+    withRule: { seatZ: string; hit: HitStack | null };
+    withoutRule: { seatZ: string; hit: HitStack | null } | null;
+  };
+  realPopupHit: HitStack | null;
+  verdict: string;
+}
+
+/** 在一个 rect 与另一个 rect 的**交集中心**做命中测试（`elementsFromPoint` = 真实命中序，上→下）。 */
+function hitStackAt(rect: DOMRect, against: DOMRect): HitStack | null {
+  const left = Math.max(rect.left, against.left);
+  const right = Math.min(rect.right, against.right);
+  const top = Math.max(rect.top, against.top);
+  const bottom = Math.min(rect.bottom, against.bottom);
+  if (right <= left || bottom <= top) return null;
+  const x = Math.round((left + right) / 2);
+  const y = Math.round((top + bottom) / 2);
+  return { at: [x, y], names: document.elementsFromPoint(x, y).slice(0, 6).map(classNameOf) };
+}
+
+/**
+ * **层叠 A/B 实测**（"弹层到底压不压得住宿主那个圆钮"）。
+ *
+ * 为什么要在真机上做 A/B，而不是靠读 CSS 推断：
+ * 我们这一层被关在宿主的 `composerSeat`（`position:sticky; z-index:7`）这个层叠上下文里，
+ * 而圆钮是**兄弟子树**里的 `z-index:8`。"谁在上面"取决于两者是不是同一个上下文、
+ * 中间有没有东西偷偷新建上下文（`container-type` 的布局包含就会）——这些只能量，不能猜。
+ *
+ * 做法：造一个与真实弹层**同一个盒子**的探针（几何全走 inline style，所以下面
+ * 摘掉抬升规则时它的位置不变），然后在同一帧里：
+ *   1. 量一次命中序（抬升规则生效）；
+ *   2. 把 `STACK_LIFT_RULE` 从我们的样式表里**精确摘掉**（其余样式一行不动，几何不变），
+ *      强制重算样式，再量同一个点；
+ *   3. 把样式表原样装回去。
+ * 于是日志里同一行就同时有"没有这条规则时的命中序"（= 出问题时你看到的）
+ * 与"有这条规则时的命中序"（= 修好之后）。两层都带上当时 seat 的实测 z-index。
+ *
+ * 探针只在**圆钮真的存在**（会话没跟随末尾 = 你滚上去了）时才插，插完立刻删掉，
+ * 全程同步，用户不可能碰到它；任何异常都吞掉——诊断绝不影响业务。
+ */
+function probeStacking(host: Element): StackProbeReport | null {
+  if (typeof document === 'undefined') return null;
+  const popup = host.querySelector<HTMLElement>('.__ru_pop,.__ru_menu');
+  const button = toBottomButton();
+  let probe: HTMLElement | null = null;
+  try {
+    const seat = host.closest('[data-composer-seat]');
+    const seatZ = (): string => (seat === null ? 'n/a' : getComputedStyle(seat).zIndex);
+    // 圆钮不在（会话还在跟随末尾）时也照量：抬升本身的 7 → 9 与它无关，
+    // 量到了就说明"规则确实作用在宿主的 seat 上"，只有"谁盖住谁"才需要圆钮在场。
+    const buttonRect = button === null ? null : button.getBoundingClientRect();
+    probe = document.createElement('div');
+    probe.className = '__ru_pop';
+    probe.setAttribute('data-rundeck-probe', 'stack');
+    probe.style.cssText =
+      'position:absolute;left:0;right:0;bottom:calc(100% + 8px);height:220px;' +
+      'padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;' +
+      'overflow:visible;pointer-events:auto';
+    host.appendChild(probe);
+    const probeRect = probe.getBoundingClientRect();
+    const probeBox = rectOf(probe); // 必须在 remove() 之前取：detach 之后 rect 恒为 0×0
+    const measure = (): HitStack | null =>
+      buttonRect === null ? null : hitStackAt(probeRect, buttonRect);
+
+    const withRule = { seatZ: seatZ(), hit: measure() };
+
+    // 摘掉抬升规则 → 重算样式 → 同一个点再量一次。
+    const tag = injectedStyleTag;
+    const saved = tag?.textContent ?? null;
+    let withoutRule: { seatZ: string; hit: HitStack | null } | null = null;
+    if (tag !== null && saved !== null && saved.includes(STACK_LIFT_RULE)) {
+      tag.textContent = saved.replace(STACK_LIFT_RULE, '');
+      void probe.getBoundingClientRect(); // 强制重算样式
+      withoutRule = { seatZ: seatZ(), hit: measure() };
+      tag.textContent = saved;
+      void probe.getBoundingClientRect();
+    }
+
+    // 真面板自己那一份（弹层打开时才量）：它和圆钮是不是真的重叠、谁在上面。
+    const realHit =
+      popup === null || buttonRect === null
+        ? null
+        : hitStackAt(popup.getBoundingClientRect(), buttonRect);
+
+    const seatShift =
+      withoutRule === null ? '?' : `${withoutRule.seatZ} → ${withRule.seatZ}`;
+    return {
+      popupOpen: popup !== null,
+      seat: seat === null ? null : stackingFacts(seat),
+      button:
+        button === null
+          ? null
+          : {
+              what: stackingFacts(button),
+              rect: rectOf(button),
+              slot: button.parentElement === null ? null : stackingFacts(button.parentElement),
+            },
+      popup: popup === null ? null : { what: stackingFacts(popup), rect: rectOf(popup) },
+      probe: { rect: probeBox, withRule, withoutRule },
+      realPopupHit: realHit,
+      // 一句话结论：日志里不用自己去比对数组（`? → ?` = 摘规则 / 装规则时最上层是谁）
+      verdict:
+        buttonRect === null
+          ? `页面上没有「回到底部」圆钮（会话跟随末尾）；抬升本身：seat z-index ${seatShift}`
+          : withoutRule === null
+            ? '没量到（样式表里没有抬升规则）'
+            : withRule.hit === null
+              ? `弹层与圆钮不重叠（当前布局下没有可争的位置）；seat z-index ${seatShift}`
+              : withoutRule.hit === null
+                ? '摘掉规则后圆钮那点已经不在弹层范围内（布局变了，不可比）'
+                : `${withoutRule.hit.names[0] ?? '?'} → ${withRule.hit.names[0] ?? '?'}；seat z-index ${seatShift}`,
+    };
+  } catch {
+    return null;
+  } finally {
+    // **无论如何**都不能把这个探针留在页面上：它是个 920×220、`pointer-events:auto`
+    // 的透明层，留在那里会一直替我们抬着 seat、还会吃掉输入框上方那一片的点击。
+    probe?.remove();
+  }
+}
+
 /**
  * 上一次上报过的行布局指纹。行一变（任务/目标/队列那几行来去）就重报一次，
  * 布局稳定时不再重复——这样"最满状态"下到底排了哪几行、行距多少，日志里能连着看。
@@ -544,10 +781,17 @@ function reportGeometry(): void {
       chipPadding: chipElement === null ? null : getComputedStyle(chipElement).paddingLeft,
     };
 
+    // 层叠实测：弹层 vs 宿主「回到底部」圆钮（见 probeStacking 的注释）。
+    // 弹层开关也要进指纹——否则"打开面板"这件事在布局上不留痕迹，日志里就看不到它。
+    const stack = probeStacking(root);
+
     const signature =
       (rows ?? [])
         .map((row) => `${row.what}@${row.top}-${row.bottom}w${row.width}/${row.bg}/${row.radius}`)
-        .join('|') + `#${density.marker}/${density.chipHeight}/${density.chipFont}`;
+        .join('|') +
+      `#${density.marker}/${density.chipHeight}/${density.chipFont}` +
+      // 层叠那段只放**稳定的结论**进指纹：rect 会随滚动抖，塞进来只会刷屏
+      `#stack:${stack === null ? 'null' : `${stack.popupOpen}/${stack.button === null ? 'noButton' : 'button'}/${stack.verdict}`}`;
     if (signature === geometrySignature) return;
     geometrySignature = signature;
 
@@ -561,6 +805,8 @@ function reportGeometry(): void {
         ancestors,
         rows,
         density,
+        // 层叠实测：弹层 vs 宿主「回到底部」圆钮（A/B 命中序 + seat 的实测 z-index）
+        stack,
         // 页面里到底挂了几个我们的实例（重注册 / 旧 bundle 残留都靠这条看）
         instances: document.querySelectorAll('.__ru_host').length,
         // 我们自己的关键计算值：宽度公式有没有生效、定位是不是旧的绝对定位
@@ -1464,10 +1710,12 @@ export default Object.assign(plugin, {
     AddPanel,
     CLIENT_VERSION,
     COMPACT_MAX_CHARS,
+    CSS,
     ErrorPanel,
     FloatingBar,
     FloatingBarHost,
     SettingsPanel,
+    STACK_LIFT_RULE,
     cwdOfSession,
     iconGlyph,
     injectStyles,

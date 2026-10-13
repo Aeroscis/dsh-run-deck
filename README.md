@@ -394,7 +394,7 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
 | `client ping: slot-rendered {…buttons:N}` | 插槽**确实渲染了**组件，并带回它看到的 `sessionId` / `focused` / `buttons` 数量 |
 | `client ping: state-changed {…hidden:true/false}` | **按结果签名去重**的一行：换会话、焦点变化、按钮数变化各留一行，`hidden:true` 就是"这一帧条不会画出来"。`slot-rendered` 按阶段名去重（一个页面生命周期只发一次），所以"切到另一个会话之后条还在不在"以前在日志里看不见——这一行补上了 |
 | `client ping: slot-focused {…}` | 焦点解析成功、按钮条真的出来了（重启后第一次为空、随后恢复的完整过程都能在日志里看到） |
-| `client ping: geometry {…}` | **真实几何 + 主题令牌**：条的 rect、输入框卡片的 rect、祖先链、`computed` 的 width/position、生效 CSS 的指纹、以及几个底色的实测值 |
+| `client ping: geometry {…}` | **真实几何 + 主题令牌**：条的 rect、输入框卡片的 rect、祖先链、`computed` 的 width/position、生效 CSS 的指纹、几个底色的实测值，以及 `stack`（层叠实测，见下一节） |
 
 三行的读法：没有第 1 行 = host 半边没加载；有 1 无 2 = 包没被浏览器取到；
 有 2 无 3 = 注册成功但插槽没渲染；`state-changed` 里看 `sessionId` / `clientCwd` /
@@ -436,6 +436,83 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
   `getComputedStyle(document.documentElement)` 上读出来全是空串；要从**自己的元素**上读。
   同理，我们的直接父元素是 `display:contents` 的插槽包装（rect 恒为 0×0），
   真正排版我们的是再往上那个 `display:flex` 的容器。
+
+### 第三个"看得见"的问题：弹层被宿主的「回到底部」圆钮压住（**层叠上下文**，已修）
+
+**现象**：⚙ / `+` 面板打开着，把会话往上滚让宿主的圆形「回到底部」钮浮出来，
+那个钮会盖在面板的右下角上（面板自己的 `z-index:10` 一点用都没有）。
+
+**根因**（三条字面事实，全部从安装包里读出来）：
+
+1. 我们这一行住在宿主的 `composerSeat` 里（`geometry.ancestors` 的最后一节就是它），
+   而 `ConversationRoot.module.css` 给的是
+   `.ank0OG_root[data-phase=active] .ank0OG_composerSeat{z-index:7;position:sticky}`。
+2. `position:sticky` + `z-index:7` = **一个层叠上下文**。真机上量到了这一条：
+   `geometry.stack.seat = "ank0OG_composerSeat{pos:sticky,z:7,上下文:positioned+z}"`。
+3. 圆钮住在 `ChatView.module.css` 的 `.X6jxGq_toBottomSlot{z-index:8}` 里，
+   而那个槽位是 seat 的**兄弟子树**（同在 `scrollBody` 下）——所以在**父上下文**里，
+   它以 8 压住整个 seat 子树（包括我们）。
+
+**关键推论**：`.__ru_pop{z-index:10}` 是"**seat 上下文内部的** 10"。层叠上下文是硬边界，
+后代再大的 z-index 也出不去 —— 所以把 10 改成 20、999 都一样没用。这不是"值不够大"，
+是"钥匙开错了锁"。
+
+**修法**：照抄宿主自己的做法。宿主在同一次冲突里（composer 里的 `@` 引用菜单同样被这个
+圆钮压住）用的就是这一招，就在同一条 seat 规则的后面：
+
+```css
+.ank0OG_root[data-phase=active] .ank0OG_composerSeat:has([data-trigger-menu]){z-index:9}
+```
+
+我们在**自己的弹层打开期间**把 seat 抬到同一个层级（`STACK_LIFT_RULE`，见 `src/client.tsx`）：
+
+```css
+[data-composer-seat][data-conversation-region="composer"]:has(.__ru_host .__ru_pop),
+[data-composer-seat][data-conversation-region="composer"]:has(.__ru_host .__ru_menu){z-index:9}
+```
+
+两个刻意的细节：选择器写成 **(0,4,0)** 特异性（`[data-composer-seat]` +
+`[data-conversation-region="composer"]` 各算一个、`:has(.__ru_host .__ru_pop)` 的参数是
+(0,2,0)），压过宿主那条 (0,3,0)——少写一个属性就打平、只剩源码顺序决胜；而且只在弹层
+打开时生效（`:has`），不动宿主的常驻布局。
+
+**证据（真机 A/B，`geometry.stack`，同一帧里"摘掉规则 / 装回规则"各量一次同一像素）**：
+
+```json
+"stack": {
+  "seat": "ank0OG_composerSeat{pos:sticky,z:7,上下文:positioned+z}",
+  "button": {"what":"X6jxGq_toBottom{pos:static,z:auto,不新建上下文}",
+             "rect":{"top":826,"left":1463,"width":34,"height":34},
+             "slot":"X6jxGq_toBottomSlot{…,z:8,…}"},
+  "popupOpen": true,
+  "probe":   {"rect":{"top":648,"left":577,"width":920,"height":220},
+              "withRule":    {"seatZ":"9","hit":{"at":[1480,843],"names":["__ru_pop","__ru_pop","svg","X6jxGq_toBottom",…]}},
+              "withoutRule": {"seatZ":"7","hit":{"at":[1480,843],"names":["svg","X6jxGq_toBottom","__ru_pop","__ru_pop",…]}}},
+  "realPopupHit": {"at":[1480,843],"names":["__ru_pop","__ru_pop","svg","X6jxGq_toBottom",…]},
+  "verdict": "svg → __ru_pop；seat z-index 7 → 9"
+}
+```
+
+圆钮**自己**是 `pos:static, z:auto`（它不新建上下文）——压住我们的是它外面那个槽位，
+安装包里 `.X6jxGq_toBottomSlot{z-index:8}`；`button.slot` 就是为它加的，滚上去时一起量。
+
+读法：**摘掉**抬升规则时，那个像素上最上层是圆钮自己（`svg` → `X6jxGq_toBottom`，
+面板 `__ru_pop` 排在它后面 = 被盖住）；**装回**规则后最上层变成我们的面板。
+`realPopupHit` 是**真面板**（不是探针）在同一像素上的命中序 —— 和"装回规则"一致。
+`hit.names` 是 `document.elementsFromPoint()` 的原话（上 → 下），不是推断。
+
+**护栏**（改坏了会红）：
+
+- `scripts/smoke-client.mjs`：规则在不在、是否只在弹层打开时生效、**:has 权重是否仍
+  严格大于**宿主那条 seat 规则（自带一个 `classTokens()` 计数 + 用宿主那条 (0,3,0) 自校验）、
+  抬升值是否仍 **> 8**；另外**直接读安装包**核对宿主契约（seat `z-index:7`、
+  `toBottomSlot{z-index:8}`、`data-composer-seat` 还在、
+  宿主那条 `:has([data-trigger-menu]){z-index:9}` 还在）——宿主改了层叠结构就会在这里炸，
+  而不是悄悄又盖回去。读不到安装包（换机器）时这一条跳过。
+- `_probe/run/bundlecheck.mjs`：契约与 A/B 探针是否真的进了客户端包。
+
+> 纯"谁盖住谁"的问题**不要靠截图数像素**：`elementsFromPoint` 的命中序就是答案，
+> 而 `geometry.stack` 会把"有这条规则 / 没这条规则"两种状态并排放在同一行日志里。
 
 顺手可查的旁证：Chromium 的 HTTP 缓存里如果存在本插件的 bundle，
 就说明浏览器**取到过**它（缓存目录见下），不必重启也能确认：

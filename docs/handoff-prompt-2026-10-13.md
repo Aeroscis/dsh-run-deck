@@ -53,6 +53,7 @@
 8. **面板**：`+`（当前工作区**全部**条目 + `⋮⋮` 拖拽排序，写 `layout.json`）、`⚙`（manifest/来源/进行中的 run（status·pid·exit·就绪URL·**最近 6 行输出**）/告警/密度/能力/两半版本）、`⚠ 启动失败`（**打开的是这条失败自己的面板**，宿主原话整段可复制，不是设置面板）。
 9. **状态点**：运行中=琥珀呼吸点、就绪=绿点、停止中=红点；tooltip 写状态。
 10. **清单改动自动生效**：`loadFocusedProject` 每次比 `.dsh/run.json` 的 mtime，变了就重读（≤2.5 秒），并留一行日志。清单被删/写坏也重读（条隐藏 + 告警，而不是留着旧按钮）。
+11. **弹层压得住宿主那个「回到底部」圆钮**（2026-10-13 第二轮加的）：⚙ / `+` 面板打开时把会话往上滚，宿主的圆形「回到底部」钮会浮出来盖住面板右下角。根因是**层叠上下文**——我们住在宿主的 `composerSeat`（`position:sticky; z-index:7`，真机实测 `上下文:positioned+z`）里，而圆钮槽位 `.X6jxGq_toBottomSlot{z-index:8}` 是 seat 的**兄弟子树**，在父上下文里压住整个 seat 子树；所以弹层自己的 `z-index:10` 是"上下文内部的 10"，改成 20/999 一样没用。修法照抄宿主自己（它对 `@` 引用菜单就是这么干的，`composerSeat:has([data-trigger-menu]){z-index:9}`）：弹层打开期间把 seat 抬到 9（`STACK_LIFT_RULE`，特异性 (0,4,0) 压过宿主那条 (0,3,0)）。**证据在 `geometry.stack`**——同一帧里把抬升规则从样式表里精确摘掉再装回，各量一次 `document.elementsFromPoint()`：摘掉时 `["svg","X6jxGq_toBottom","__ru_pop",…]`（圆钮在面板之上 = 故障），装回时 `["__ru_pop","__ru_pop","svg","X6jxGq_toBottom",…]`，seat `z-index 7 → 9`；`realPopupHit` 是真面板自己的命中序，与"装回"一致。
 
 ## 4. 已定死的设计（**不要重新讨论**）
 
@@ -71,6 +72,7 @@
 4. **泄漏兜底**：启动脚本的进程树里有 `pnpm → GUI node host → cmd /c vite` 这类中间层，中间进程退出后真正的服务会**重新挂父**，脚本自己的 `taskkill /T` 会漏掉它。插件的对策是轮询里每 800ms 调一次 `handle.inspectActivity()`（把当前后代攒进 handle 的 `trackedDescendants`），`terminate()` 时靠这份记录杀整棵树 —— **别删这一步**（有护栏测试）。
 5. **"空 cmd 窗口"的根因（已查清）**：Windows 上"没有控制台的进程"去起控制台程序时，系统会**新分配一个控制台**，Windows 11 用 Windows Terminal 打开它 → 桌面上出现一个标题为 `C:\WINDOWS\system32\cmd.exe`、内容空白的窗口。实测链条：`python → cmd(pnpm.cmd) → DSH Desktop.exe（GUI 二进制当 node 跑 pnpm.mjs）→ cmd /c vite preview`，**控制台就是在 pnpm 那一层被分配的**。所以：**agent 自己（无控制台环境）跑命令也会造出这个窗口**；被调用项目的脚本如果要起本地服务，最好**直接调 `node_modules/.bin/<tool>`，不要经过 pnpm**（jin 的 `start_gallery_web.py` 已经这么改了）。
 6. 未做：完整输出面板（现在只有最近 6 行）、密度 segmented control（现在是循环切换）、步骤序列编排。
+6b. **弹层抬升借用的是宿主的内部事实**（`data-composer-seat` / `data-conversation-region="composer"` 两个属性 + 宿主 seat 是 `z-index:7`、圆钮槽 `z-index:8` + 宿主那条规则的特异性 (0,3,0)）。这些**不是公开契约**，所以 `scripts/smoke-client.mjs` 里有一条护栏**直接读安装包**核对它们（seat 7 / 圆钮槽 8 / 两个 data 属性还在 / 宿主自己那条 `:has([data-trigger-menu]){z-index:9}` 还在）；宿主哪天改了层叠结构，`npm run check` 会先炸，而不是界面悄悄又被盖回去。`DSH_APP_DIR` 可以指到别的安装目录，读不到就跳过那一条。
 7. 使用者仓库 `jin` 里我改过两个脚本（`start_gallery_web.py` / `start_gallery_desktop.py`：去掉多余的 `"--"`、`except SystemExit` 收尾、`CREATE_NO_WINDOW`、`vite_command()` 直调本地 vite）——那是**他的仓库**，不是插件的一部分。
 
 ## 6. 验证手段（照着用，别靠猜）

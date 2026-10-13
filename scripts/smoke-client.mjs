@@ -10,7 +10,7 @@
  * 运行：`node scripts/smoke-client.mjs`（与 `npm run smoke:client` 等同）。
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -151,6 +151,129 @@ await (async () => {
       assert.ok(zh.includes(key), `ZH 缺 ${key}`);
       assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
     }
+  });
+
+  /* ── 层叠护栏：弹层必须压得过宿主「回到底部」圆钮 ──
+   *
+   * 根因（实测）：我们这一行住在宿主的 `composerSeat` 里，而宿主给它的是
+   * `position:sticky; z-index:7` —— **那是一个层叠上下文**。「回到底部」圆钮的槽位
+   * `X6jxGq_toBottomSlot{z-index:8}` 是 seat 的**兄弟子树**，在父上下文里以 8 压住
+   * 整个 seat 子树。于是弹层自己的 `z-index:10` 是"上下文内部的 10"，出不去 ——
+   * 把 10 改成 20/999 一点用都没有。唯一的修法是把 seat 抬到 8 以上（宿主自己遇到
+   * 同一个问题时就把它抬到 9，见下面 host 契约那一段）。
+   *
+   * 这几条护栏盯的就是"这一招别被后人改坏"：规则还在不在、**权重还压不压得过**
+   * 宿主那条 (0,3,0)、值还高不高于 8、是不是仍然只在弹层打开时生效。
+   */
+
+  /** 选择器里"类级别"的 token 数（类 / 属性 / 无参伪类）——本处两个选择器都只有类级 token，
+   *  所以它就是特异性里的 b 那一档（`:has(...)` 的参数按规范**替换**伪类本身计入）。
+   *  用宿主那条已知的 (0,3,0) 做自校验，见下一条检查。 */
+  const classTokens = (selector) =>
+    (selector.match(/\[[^\]]+\]|\.[A-Za-z_][\w-]*|:(?!has\()[\w-]+(?!\()/gu) ?? []).length;
+
+  /** 取我们样式表里那条抬升规则（选择器 + z-index）。 */
+  const liftRuleOf = (css) => {
+    const rule = /([^{}]*\[data-composer-seat\][^{}]*)\{([^}]*)\}/u.exec(css);
+    if (rule === null) return null;
+    return {
+      selector: rule[1].trim(),
+      zIndex: Number(/z-index:\s*(\d+)/u.exec(rule[2] ?? '')?.[1] ?? Number.NaN),
+      selectors: rule[1].split(',').map((part) => part.trim()).filter((part) => part.length > 0),
+    };
+  };
+
+  await check('抬升规则在样式表里，且只在我们的弹层打开时生效（:has，不常驻改宿主布局）', () => {
+    const lift = liftRuleOf(x.CSS ?? '');
+    assert.ok(lift !== null, 'CSS 里没有针对 [data-composer-seat] 的抬升规则');
+    assert.ok(
+      x.STACK_LIFT_RULE !== undefined && (x.CSS ?? '').includes(x.STACK_LIFT_RULE),
+      'CSS 里那份规则与 STACK_LIFT_RULE 常量不是同一份（诊断的 A/B 会摘错东西）',
+    );
+    for (const selector of lift.selectors) {
+      assert.match(selector, /:has\(/u, `选择器没有 :has() 条件：${selector}`);
+      assert.match(selector, /__ru_pop|__ru_menu/u, `:has() 里没有盯着我们自己的弹层：${selector}`);
+    }
+    // 我们碰宿主 seat 的地方**只有这一处**（不允许顺手动宿主的常驻布局）
+    assert.equal(
+      (x.CSS.match(/\[data-composer-seat\]/gu) ?? []).length,
+      lift.selectors.length,
+      'CSS 里除了这条抬升规则还动了 [data-composer-seat]',
+    );
+  });
+
+  await check('抬升规则的权重压得过宿主那条 seat 规则（(0,4,0) vs (0,3,0)）', () => {
+    const lift = liftRuleOf(x.CSS ?? '');
+    assert.ok(lift !== null, 'CSS 里没有抬升规则');
+    // 宿主那条（安装包里读出来的原话，见下面的 host 契约检查）：
+    const hostSelector = '.ank0OG_root[data-phase=active] .ank0OG_composerSeat';
+    assert.equal(classTokens(hostSelector), 3, '（自校验）宿主那条应该是 (0,3,0)');
+    for (const selector of lift.selectors) {
+      assert.ok(
+        classTokens(selector) > classTokens(hostSelector),
+        `权重不够，会被宿主压回去：${selector} → ${classTokens(selector)} vs 3`,
+      );
+    }
+  });
+
+  await check('抬升后的 z-index 严格高于宿主「回到底部」槽位的 8', () => {
+    const lift = liftRuleOf(x.CSS ?? '');
+    assert.ok(lift !== null, 'CSS 里没有抬升规则');
+    assert.ok(Number.isFinite(lift.zIndex), `抬升规则没写 z-index：${lift.selector}`);
+    assert.ok(lift.zIndex > 8, `z-index ${lift.zIndex} 压不过宿主圆钮槽位的 8`);
+  });
+
+  await check('诊断带层叠 A/B（真机命中序：摘掉规则 / 装回规则）', () => {
+    const bundle = readFileSync(bundlePath, 'utf8');
+    assert.ok(bundle.includes('elementsFromPoint'), '诊断里没有 elementsFromPoint（命中序只能实测）');
+    assert.ok(bundle.includes('probeStacking'), '没有层叠 A/B 探针');
+    // A/B 必须是"同一帧里摘掉规则再量一次"，否则只是又读了一遍 CSS
+    assert.ok(
+      /replace\(\s*STACK_LIFT_RULE/u.test(bundle) || bundle.includes('STACK_LIFT_RULE'),
+      'A/B 没有精确摘掉抬升规则',
+    );
+  });
+
+  await check('宿主契约仍然成立（seat 的 z-index:7 / 圆钮槽 8 / 宿主自己也用抬升这一招）', () => {
+    // 这两份是**安装包里的字面事实**（根因与修法都从这里读出来）。装了别的版本、
+    // 或换台机器没装 DSH 时跳过（不算失败），但只要能读到就必须对得上——
+    // 对不上说明宿主改了层叠结构，我们的抬升值要重算。
+    const appDir = process.env.DSH_APP_DIR ?? 'C:\\Program Files\\DSH Desktop\\resources\\app';
+    const conversation = join(appDir, 'node_modules', '@deepseek-ai', 'dsh-client-ui-conversation', 'lib', 'client.js');
+    const chat = join(appDir, 'node_modules', '@deepseek-ai', 'dsh-client-ui-chat', 'lib', 'client.js');
+    if (!existsSync(conversation) || !existsSync(chat)) {
+      console.log(`    – 跳过：读不到安装包（${appDir}）`);
+      return;
+    }
+    const convSource = readFileSync(conversation, 'utf8');
+    const chatSource = readFileSync(chat, 'utf8');
+    const lift = liftRuleOf(x.CSS ?? '');
+    assert.ok(lift !== null, 'CSS 里没有抬升规则');
+
+    // 1. seat 仍然是宿主给的那一条：state-phase=active 下 z-index:7
+    const seatRule = /\.ank0OG_composerSeat[^{}]*\{z-index:(\d+);[^}]*position:sticky/u.exec(convSource);
+    assert.ok(seatRule !== null, '宿主那份 composerSeat 规则变了（z-index / position:sticky）');
+    assert.equal(seatRule[1], '7', `宿主的 composerSeat 已经不是 z-index:7（现在是 ${seatRule[1]}）`);
+    assert.ok(lift.zIndex > Number(seatRule[1]), '我们的抬升值不高于宿主的 seat');
+
+    // 2. 圆钮槽位仍然是 z-index:8（就是它把弹层压住的）
+    const slotRule = /toBottomSlot\{z-index:(\d+)/u.exec(chatSource);
+    assert.ok(slotRule !== null, '宿主那份 toBottomSlot 规则变了');
+    assert.equal(slotRule[1], '8', `宿主的 toBottomSlot 已经不是 z-index:8（现在是 ${slotRule[1]}）`);
+    assert.ok(lift.zIndex > Number(slotRule[1]), '我们的抬升值不高于圆钮槽位');
+
+    // 3. 宿主的锚点没换名字：seat 上有 data-composer-seat / data-conversation-region
+    assert.ok(convSource.includes('"data-composer-seat"'), '宿主 seat 不再挂 data-composer-seat');
+    assert.ok(
+      convSource.includes('"data-conversation-region": "composer"'),
+      '宿主 seat 不再挂 data-conversation-region="composer"（我们的选择器会失效）',
+    );
+
+    // 4. 宿主自己也承认这个问题（同一个洞里它就是靠抬升解决的，我们照抄）
+    assert.ok(
+      /composerSeat:has\(\[data-trigger-menu\]\)\{z-index:9\}/u.test(convSource),
+      '宿主那条 :has([data-trigger-menu]){z-index:9} 没了（说明层叠结构可能变了）',
+    );
   });
 
   console.log(`\n${passed} checks passed${failed > 0 ? `, ${failed} FAILED` : ''}`);
