@@ -234,6 +234,87 @@ await (async () => {
     );
   });
 
+  /* ── 拖拽排序护栏（"拖起来只有一个虚影"的根因是原生 HTML5 拖放）──
+   *
+   * 原生 `draggable` 的行为：浏览器给**拖源元素**（那个只有 4 个字形的 `⋮⋮` 手柄）
+   * 拍一张半透明快照当拖影、由系统绘制；真正的行留在原地只变淡；顺序只在 `drop`
+   * 那一刻才改（拖动中没有即时预览、没有让位动画）；拖影的透明度/动画不受页面控制。
+   *
+   * 现在是指针事件自己实现：下面这几个纯函数就是"即拖即预览"的全部数学，
+   * 离线逐值验；"不再有原生拖放"则由下面那条包体检查盯着。
+   */
+
+  await check('moveInOrder：往上/往下各挪一次，不改原数组，from===to 原样', () => {
+    const { moveInOrder } = x;
+    assert.equal(typeof moveInOrder, 'function', 'moveInOrder 不在 internals 上');
+    const list = ['a', 'b', 'c', 'd'];
+    assert.deepEqual(moveInOrder(list, 0, 2), ['b', 'c', 'a', 'd']);
+    assert.deepEqual(moveInOrder(list, 3, 1), ['a', 'd', 'b', 'c']);
+    assert.deepEqual(moveInOrder(list, 1, 1), list);
+    assert.deepEqual(list, ['a', 'b', 'c', 'd'], 'moveInOrder 改了原数组');
+  });
+
+  await check('restTops：行高 + 行距的累积 top', () => {
+    const { restTops } = x;
+    assert.deepEqual(restTops([36, 36, 36], 6), [0, 42, 84]);
+    assert.deepEqual(restTops([10, 30, 20], 6), [0, 16, 52]);
+    assert.deepEqual(restTops([], 6), []);
+  });
+
+  await check('dropIndexFor：落点 = 被拖行中心越过谁的"静止中点"', () => {
+    const { dropIndexFor } = x;
+    assert.equal(typeof dropIndexFor, 'function', 'dropIndexFor 不在 internals 上');
+    const equal = [36, 36, 36];
+    // 等行高 36 + 行距 6 = 步长 42；第 1 行的中点是 60，被拖行起点中心是 18。
+    assert.equal(dropIndexFor(equal, 6, 0, 0), 0);
+    assert.equal(dropIndexFor(equal, 6, 0, 41), 0, '还没越过中点就不该落位');
+    assert.equal(dropIndexFor(equal, 6, 0, 43), 1, '越过第 1 行中点 → 落到第 1 位');
+    assert.equal(dropIndexFor(equal, 6, 0, 85), 2);
+    assert.equal(dropIndexFor(equal, 6, 0, 9999), 2, '拖到列表外应该夹在最后一位');
+    assert.equal(dropIndexFor(equal, 6, 2, -9999), 0, '往上拖到列表外应该夹在第 0 位');
+    assert.equal(dropIndexFor(equal, 6, 1, 0), 1);
+    // 行高不一致时按各自的中点算（不是按"步长"）：[10,30,20] 的中点 31 与 62
+    const mixed = [10, 30, 20];
+    assert.equal(dropIndexFor(mixed, 6, 0, 30), 1);
+    assert.equal(dropIndexFor(mixed, 6, 0, 60), 2);
+    assert.equal(dropIndexFor(mixed, 6, 2, -32), 1);
+    assert.equal(dropIndexFor(mixed, 6, 2, -60), 0);
+  });
+
+  await check('previewOffsets：让位的位移用累积高度算（行高不一致也对齐）', () => {
+    const { previewOffsets } = x;
+    assert.equal(typeof previewOffsets, 'function', 'previewOffsets 不在 internals 上');
+    // 等行高：往下挪一位 → 只有被让的那一行上移一个步长
+    assert.deepEqual(previewOffsets([36, 36, 36], 6, 0, 1), [42, -42, 0]);
+    assert.deepEqual(previewOffsets([36, 36, 36], 6, 2, 0), [42, 42, -84]);
+    // 行高不一致：被拖行高 10 + 行距 6 = 16，让位的两行各上移 16
+    assert.deepEqual(previewOffsets([10, 30, 20], 6, 0, 2), [62, -16, -16]);
+    assert.deepEqual(previewOffsets([10, 30, 20], 6, 2, 0), [26, 26, -52]);
+    // 落点没变就没有位移（不然"点一下"也会动）
+    assert.deepEqual(previewOffsets([36, 36, 36], 6, 1, 1), [0, 0, 0]);
+  });
+
+  await check('拖拽排序不再用原生 HTML5 拖放（虚影的根因），改指针事件 + 过渡', () => {
+    const bundle = readFileSync(bundlePath, 'utf8');
+    // 注意：不能按裸词查——上面那段解释"为什么不用原生拖放"的注释里就写着 draggable。
+    // JSX 属性在编译产物里是对象键（`draggable: true`），所以按 `名字:` 查。
+    for (const dead of ['draggable', 'onDragStart', 'onDragOver', 'onDrop', 'onDragEnd']) {
+      assert.ok(
+        !new RegExp(`\\b${dead}\\s*:`, 'u').test(bundle),
+        `包里还有原生拖放的 ${dead}（浏览器会自己画半透明拖影）`,
+      );
+    }
+    assert.ok(!bundle.includes('dataTransfer'), '包里还有原生拖放的 dataTransfer');
+    assert.ok(!/__ru_rowDragging\{opacity/u.test(bundle), '还在用"原位置变淡"表示正在拖');
+    // 正面要求：指针捕获（移出元素还能拖）、让位过渡、落位过渡
+    assert.ok(bundle.includes('setPointerCapture'), '没有 setPointerCapture：移出元素就断');
+    assert.ok(bundle.includes('onPointerMove'), '没有 pointermove 处理');
+    assert.ok(bundle.includes('__ru_rowShift'), '没有"其余各行让位"的过渡类');
+    assert.ok(bundle.includes('__ru_rowSettle'), '没有"松手滑进槽位"的过渡类');
+    // 诊断：每次拖动都要在宿主日志里留一行（读不到就没法查"为什么落点不对"）
+    assert.ok(bundle.includes('drag-start') && bundle.includes('drag-end'), '拖拽没有诊断上报');
+  });
+
   await check('宿主契约仍然成立（seat 的 z-index:7 / 圆钮槽 8 / 宿主自己也用抬升这一招）', () => {
     // 这两份是**安装包里的字面事实**（根因与修法都从这里读出来）。装了别的版本、
     // 或换台机器没装 DSH 时跳过（不算失败），但只要能读到就必须对得上——

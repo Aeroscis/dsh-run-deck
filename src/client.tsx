@@ -83,6 +83,7 @@ const ZH: Record<string, string> = {
   addPin: '钉到按钮条',
   addHide: '从按钮条收起',
   addClose: '关闭',
+  dragHint: '按住拖动排序（也可以 Alt+↑ / Alt+↓）',
   settingsTitle: 'Run Configuration',
   settingsManifest: '清单文件',
   settingsSource: '配置来源',
@@ -131,6 +132,7 @@ const EN: Record<string, string> = {
   addPin: 'Pin to bar',
   addHide: 'Hide from bar',
   addClose: 'Close',
+  dragHint: 'Drag to reorder (or Alt+↑ / Alt+↓)',
   settingsTitle: 'Run Configuration',
   settingsManifest: 'Manifest',
   settingsSource: 'Config source',
@@ -264,8 +266,16 @@ const CSS = [
   '.__ru_runTail{margin:0;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-family-mono,monospace);font-size:11px;line-height:16px;white-space:pre-wrap;word-break:break-word;user-select:text}',
   '.__ru_row{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;margin-bottom:6px;background:var(--dsw-alias-bg-layer-1)}',
   '.__ru_row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
-  '.__ru_rowDragging{opacity:.5}',
-  '.__ru_handle{flex:none;width:20px;text-align:center;color:var(--dsw-alias-label-tertiary);cursor:ns-resize;user-select:none;font-size:15px;line-height:1}',
+  // ── 拖动排序（指针事件，**不是** HTML5 draggable）──
+  // 被拖那一行跟着指针走：抬起来的样子（阴影 + 分层底色），不再用 `opacity:.5`
+  // 那种"原位置半透明 + 浏览器自己画的虚影"的旧做法。
+  // 选择器写成 `.__ru_row.__ru_rowDragging`（两档），否则会输给上面的 `:hover`。
+  '.__ru_row.__ru_rowDragging{position:relative;z-index:3;opacity:1;cursor:grabbing;border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-2);box-shadow:0 10px 26px rgba(0,0,0,.32)}',
+  // 其余各行"让位"时的过渡：这就是"即时预览 + 动画"里那个动画。
+  '.__ru_rowShift{transition:transform 180ms cubic-bezier(.2,0,0,1)}',
+  // 松手那一下：被拖行滑进新槽位（FLIP），而不是啪地跳过去。
+  '.__ru_rowSettle{transition:transform 160ms cubic-bezier(.2,0,0,1)}',
+  '.__ru_handle{flex:none;width:20px;text-align:center;color:var(--dsw-alias-label-tertiary);cursor:grab;user-select:none;touch-action:none;font-size:15px;line-height:1}',
   '.__ru_rowBody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
   '.__ru_rowLabel{font-size:13px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
   '.__ru_rowCmd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -372,6 +382,17 @@ function report(stage: string, detail?: Record<string, unknown>): void {
 function reportKeyed(key: string, stage: string, detail: Record<string, unknown>): void {
   if (reported.has(key)) return;
   reported.add(key);
+  void call('/ping', 'POST', { stage, detail });
+}
+
+/**
+ * **每次都发**的上报（不做去重）。
+ *
+ * 给"同一件事会发生很多次"的诊断用：拖拽排序每拖一次都要留一行（"这次拖了几行、
+ * 落点算成了第几位"），而 `reportKeyed` 的键是内容签名——同一段落点会被吃掉，
+ * 那就正好看不见"为什么落点不对"。
+ */
+function reportEvery(stage: string, detail: Record<string, unknown>): void {
   void call('/ping', 'POST', { stage, detail });
 }
 
@@ -1188,7 +1209,109 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
 
 /* ================================================================== *
  * `+` 面板：当前工作区的全部条目 + burger 拖拽排序
+ *
+ * ## 为什么不是 HTML5 `draggable`（这是"拖起来只有一个虚影"的根因）
+ *
+ * 早先的写法是把手柄 `⋮⋮` 标成 `draggable`，靠 `dragstart/dragover/drop` 排序。
+ * 那是**浏览器的原生拖放**，它按自己的规矩来：
+ *   1. 浏览器在 `dragstart` 那一刻给**拖源元素**（我们标的是那个只有 4 个字形的
+ *      `⋮⋮` 手柄）拍一张半透明快照当"拖影"，然后**由系统绘制、跟着光标走**——
+ *      所以看到的是一小团虚影，而不是那行跟手；
+ *   2. 真正的行留在原地（我们当时只给它 `opacity:.5` 表示"正在拖"）——
+ *      于是"一行变淡 + 一团虚影"，两样都不是你要的东西；
+ *   3. 顺序只在 `drop` 那一刻才改（`onDrop` 里 `move(...)`），拖动过程中
+ *      列表一动不动 → 没有即时预览，也没有"别的行让开"的动画；
+ *   4. 拖影的透明度/偏移/动画**都不受页面控制**（那是 OS/浏览器的实现），
+ *      想让手感变成 sortable 那种，只能不用原生拖放。
+ *
+ * 现在改成指针事件（Pointer Events）自己实现：手柄上 `pointerdown` 抓起那一行，
+ * 那一行 `translateY` 跟着指针（抬起样式 = 阴影 + 分层底色），其余各行按
+ * `previewOffsets()` 算出的位移**带过渡**让位，落点由 `dropIndexFor()` 每帧算，
+ * 松手时那一行再 FLIP 滑进槽位。全程没有 DOM 重排（只在落点提交时重排一次），
+ * 所以不会抖。
  * ================================================================== */
+
+/**
+ * 拖拽排序用的"静止布局"——每一行的 top（**滚动内容坐标系**，第一行为 0）。
+ * 只看行高与行距，不碰 DOM：DOM 只负责在启动那一刻量一次每行的高度。
+ */
+function restTops(heights: number[], gap: number): number[] {
+  const tops: number[] = [];
+  let y = 0;
+  for (const height of heights) {
+    tops.push(y);
+    y += height + gap;
+  }
+  return tops;
+}
+
+/** 把 `from` 挪到 `to`（返回新数组，不改原数组）。 */
+function moveInOrder<T>(list: T[], from: number, to: number): T[] {
+  const next = [...list];
+  if (from === to || from < 0 || from >= next.length) return next;
+  const [moved] = next.splice(from, 1);
+  if (moved === undefined) return next; // 类型上的保险（T 含 undefined 时不动）
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/**
+ * 指针纵向位移 `dy` 之后，被拖那一行应该落到第几位。
+ *
+ * 判据：把**被拖行自己的槽位摘掉**，其余每一行有一个"静止中点"；被拖行的中心
+ * 越过谁的中点，它就排到谁后面（数一数就是落点）。这是"即拖即预览"的核心，
+ * 而且不碰 DOM —— 所以能在离线 smoke 里逐值验（含行高不一致的情况）。
+ */
+function dropIndexFor(heights: number[], gap: number, from: number, dy: number): number {
+  if (from < 0 || from >= heights.length) return Math.max(0, from);
+  const tops = restTops(heights, gap);
+  const center = (tops[from] ?? 0) + (heights[from] ?? 0) / 2 + dy;
+  let to = 0;
+  for (let index = 0; index < heights.length; index += 1) {
+    if (index === from) continue;
+    if ((tops[index] ?? 0) + (heights[index] ?? 0) / 2 < center) to += 1;
+  }
+  return to;
+}
+
+/**
+ * 预览布局：每一行（**原始下标**）该平移多少像素，才能空出/补上被拖那一行的位置。
+ *
+ * 用累积高度算，而不是"每行挪 `被拖行高 + 行距`"——行高不一致时（标签折行、
+ * 提示行）前者仍然逐行对齐，后者会错位。被拖那一行的位移不用于渲染（它跟着
+ * 指针走），调用方自行忽略。
+ */
+function previewOffsets(heights: number[], gap: number, from: number, to: number): number[] {
+  const tops = restTops(heights, gap);
+  const ids = heights.map((_, index) => index);
+  const offsets = heights.map(() => 0);
+  let y = tops[0] ?? 0;
+  for (const id of moveInOrder(ids, from, to)) {
+    offsets[id] = y - (tops[id] ?? 0);
+    y += (heights[id] ?? 0) + gap;
+  }
+  return offsets;
+}
+
+/** 一次拖动排序的全部状态：启动那一刻量一次的行高/行距 + 每帧变的 dy/落点。 */
+interface RowDrag {
+  /** 被拖那一行在启动那一刻的下标。 */
+  index: number;
+  pointerId: number;
+  /** 指针起点（滚动内容坐标系）。 */
+  startY: number;
+  /** 当前纵向位移（同一坐标系，已夹在列表范围内）。 */
+  dy: number;
+  /** 当前落点（0..n-1）。 */
+  to: number;
+  /** 每一行在预览布局里的平移量（按原始下标索引）。 */
+  offsets: number[];
+  heights: number[];
+  gap: number;
+  /** dy 的上下界：不让被拖那行飞出列表之外。 */
+  min: number;
+  max: number;
+}
 
 /** `+` 面板——"完整管理视图"，顺序即按钮条顺序。 */
 function AddPanel(props: BarProps): React.ReactElement {
@@ -1202,23 +1325,196 @@ function AddPanel(props: BarProps): React.ReactElement {
       })
       .map((entry) => entry.id),
   );
-  const [dragIndex, setDragIndex] = React.useState<number | null>(null);
+  const [drag, setDrag] = React.useState<RowDrag | null>(null);
+  /** 松手后那一行的 FLIP 落位动画（`entry` 是它，`dy` 从"松手那一刻的位置"过渡到 0）。 */
+  const [settle, setSettle] = React.useState<{ entry: string; dy: number } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+  /** 拖动数据放在 ref 里当**唯一真源**：`pointerup` 不依赖 React 有没有重渲染过。 */
+  const dragRef = React.useRef<RowDrag | null>(null);
+  /** 最后一次指针的视口 Y（自动滚动时指针不动，也要能继续算落点）。 */
+  const pointerY = React.useRef(0);
+  const endRef = React.useRef<(commit: boolean) => void>(() => {});
 
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
 
   const move = (from: number, to: number): void => {
     if (to < 0 || to >= order.length || to === from) return;
-    const next = [...order];
-    const [moved] = next.splice(from, 1);
-    if (moved === undefined) return;
-    next.splice(to, 0, moved);
+    const next = moveInOrder(order, from, to);
     setOrder(next);
     void onReorder(next).catch(() => setError(runtime.t('saveFailed')));
   };
 
+  /** 滚动容器：`.__ru_pop` 就是 `overflow:auto` 的那一层（面板本身）。 */
+  const scroller = (): HTMLElement | null => {
+    const node = listRef.current;
+    return node === null ? null : node.closest<HTMLElement>('.__ru_pop, .__ru_menu');
+  };
+
+  /**
+   * 按"指针现在在哪"重算 dy / 落点 / 预览位移。
+   *
+   * 一切都在**滚动内容坐标系**里算（`视口Y - 容器顶 + scrollTop`），所以容器
+   * 自己滚动（贴边自动滚动、滚轮）不会让那一行从指针底下跑掉。
+   */
+  const syncDrag = (): void => {
+    const current = dragRef.current;
+    if (current === null) return;
+    const box = scroller();
+    if (box === null) return;
+    const boxRect = box.getBoundingClientRect();
+    const contentY = pointerY.current - boxRect.top + box.scrollTop;
+    const dy = Math.min(current.max, Math.max(current.min, contentY - current.startY));
+    const to = dropIndexFor(current.heights, current.gap, current.index, dy);
+    if (dy === current.dy && to === current.to) return;
+    const next: RowDrag = {
+      ...current,
+      dy,
+      to,
+      offsets: previewOffsets(current.heights, current.gap, current.index, to),
+    };
+    dragRef.current = next;
+    setDrag(next);
+  };
+
+  const startDrag = (event: React.PointerEvent<HTMLSpanElement>, index: number): void => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return; // 只认左键
+    const list = listRef.current;
+    const box = scroller();
+    if (list === null || box === null) return;
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('.__ru_row'));
+    if (rows.length === 0 || rows.length !== order.length) return;
+    const boxRect = box.getBoundingClientRect();
+    const heights = rows.map((row) => row.getBoundingClientRect().height);
+    const tops = rows.map(
+      (row) => row.getBoundingClientRect().top - boxRect.top + box.scrollTop,
+    );
+    // 行距实测（CSS 是 `margin-bottom:6px`；行数不足时按 6 兜底）
+    const gap =
+      rows.length > 1 ? Math.max(0, (tops[1] ?? 0) - (tops[0] ?? 0) - (heights[0] ?? 0)) : 6;
+    const top = tops[index] ?? 0;
+    const height = heights[index] ?? 0;
+    const lastTop = tops[rows.length - 1] ?? 0;
+    const lastHeight = heights[rows.length - 1] ?? 0;
+    event.preventDefault();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* 拿不到捕获也能拖（只是移出元素后收不到事件） */
+    }
+    pointerY.current = event.clientY;
+    const next: RowDrag = {
+      index,
+      pointerId: event.pointerId,
+      startY: event.clientY - boxRect.top + box.scrollTop,
+      dy: 0,
+      to: index,
+      offsets: previewOffsets(heights, gap, index, index),
+      heights,
+      gap,
+      min: -top,
+      max: lastTop + lastHeight - (top + height),
+    };
+    dragRef.current = next;
+    setSettle(null);
+    setDrag(next);
+    reportEvery('drag-start', {
+      rows: rows.length,
+      from: index,
+      heights: heights.map((value) => Math.round(value)),
+      gap: Math.round(gap * 100) / 100,
+    });
+  };
+
+  const endDrag = (commit: boolean): void => {
+    const current = dragRef.current;
+    dragRef.current = null;
+    if (current === null) return;
+    // 落点**现算**（不信任上一次渲染的状态）：松手那一帧指针可能又动了。
+    const box = scroller();
+    let dy = current.dy;
+    let to = current.to;
+    if (commit && box !== null) {
+      const boxRect = box.getBoundingClientRect();
+      const contentY = pointerY.current - boxRect.top + box.scrollTop;
+      dy = Math.min(current.max, Math.max(current.min, contentY - current.startY));
+      to = dropIndexFor(current.heights, current.gap, current.index, dy);
+    }
+    setDrag(null);
+    if (!commit || to === current.index) {
+      // 把实测位移一起写出来：`dy` 很小 = "没跨过任何中点"（正确行为），
+      // `dy` 明明跨过一格却还停在原位 = 落点算错了（这两件事必须能分开）。
+      reportEvery('drag-end', {
+        from: current.index,
+        to: current.index,
+        moved: false,
+        cancelled: !commit,
+        dy: Math.round(dy),
+        limit: [Math.round(current.min), Math.round(current.max)],
+      });
+      return;
+    }
+    const offsets = previewOffsets(current.heights, current.gap, current.index, to);
+    const entry = order[current.index];
+    if (entry !== undefined) {
+      // 松手时那一行还在指针底下，而它马上要落进新槽位：先把它按"松手位置 - 槽位位置"
+      // 摆回去，下一帧再归零 —— 于是它是**滑**过去，不是啪地跳一下。
+      setSettle({ entry, dy: dy - (offsets[current.index] ?? 0) });
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() =>
+          setSettle((value) => (value === null ? value : { ...value, dy: 0 })),
+        );
+      });
+    }
+    move(current.index, to);
+    reportEvery('drag-end', {
+      from: current.index,
+      to,
+      moved: true,
+      settle: Math.round(dy - (offsets[current.index] ?? 0)),
+      gap: Math.round(current.gap * 100) / 100,
+    });
+  };
+  React.useEffect(() => {
+    endRef.current = endDrag;
+  });
+
+  // 拖动期间的三件全局事：别选中文字、Esc 取消、指针贴边时自动滚动（长清单能拖到底）。
+  React.useEffect(() => {
+    if (drag === null) return;
+    const body = document.body;
+    const previousUserSelect = body.style.userSelect;
+    body.style.userSelect = 'none';
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      endRef.current(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    let raf = 0;
+    const step = (): void => {
+      const box = scroller();
+      if (box !== null) {
+        const rect = box.getBoundingClientRect();
+        const edge = 28;
+        const speed = 12;
+        if (pointerY.current < rect.top + edge) box.scrollTop -= speed;
+        else if (pointerY.current > rect.bottom - edge) box.scrollTop += speed;
+        syncDrag();
+      }
+      raf = window.requestAnimationFrame(step);
+    };
+    raf = window.requestAnimationFrame(step);
+    return () => {
+      body.style.userSelect = previousUserSelect;
+      window.removeEventListener('keydown', onKeyDown);
+      window.cancelAnimationFrame(raf);
+    };
+  }, [drag === null]);
+
   return (
-    <div>
+    <div ref={listRef}>
       <h4 className="__ru_popTitle">{runtime.t('addTitle')}</h4>
       <p className="__ru_popHint">{runtime.t('addHint')}</p>
       {error !== null ? <p className="__ru_error">❌ {error}</p> : null}
@@ -1227,22 +1523,60 @@ function AddPanel(props: BarProps): React.ReactElement {
         const entry = byId.get(entryId);
         if (entry === undefined) return null;
         const pinned = buttons.some((b) => b.entry === entryId);
+        const dragging = drag !== null && drag.index === index;
+        const settling = settle !== null && settle.entry === entryId;
+        // 拖动中：被拖那一行跟指针，其余各行按预览位移**带过渡**让开。
+        // 落点提交后（drag=null）所有 transform 一起消失，而 DOM 顺序正好等于预览
+        // 布局 —— 同一帧发生，所以不会看到任何跳动。
+        const transform = dragging
+          ? `translateY(${drag.dy}px)`
+          : settling
+            ? `translateY(${settle.dy}px)`
+            : drag === null
+              ? null
+              : `translateY(${drag.offsets[index] ?? 0}px)`;
+        const className = [
+          '__ru_row',
+          dragging ? '__ru_rowDragging' : '',
+          drag !== null && !dragging ? '__ru_rowShift' : '',
+          settling ? '__ru_rowSettle' : '',
+        ]
+          .filter((part) => part.length > 0)
+          .join(' ');
         return (
           <div
             key={entryId}
-            className={dragIndex === index ? '__ru_row __ru_rowDragging' : '__ru_row'}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => {
-              if (dragIndex !== null) move(dragIndex, index);
-              setDragIndex(null);
-            }}
+            className={className}
+            style={transform === null ? undefined : { transform }}
           >
             <span
               className="__ru_handle"
-              title="拖拽排序"
-              draggable
-              onDragStart={() => setDragIndex(index)}
-              onDragEnd={() => setDragIndex(null)}
+              role="button"
+              tabIndex={0}
+              title={runtime.t('dragHint')}
+              aria-label={runtime.t('dragHint')}
+              onPointerDown={(event) => startDrag(event, index)}
+              onPointerMove={(event) => {
+                if (dragRef.current === null || event.pointerId !== dragRef.current.pointerId) return;
+                pointerY.current = event.clientY;
+                syncDrag();
+              }}
+              onPointerUp={() => {
+                if (dragRef.current !== null) endDrag(true);
+              }}
+              onPointerCancel={() => {
+                if (dragRef.current !== null) endDrag(false);
+              }}
+              onKeyDown={(event) => {
+                if (!event.altKey) return;
+                if (event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  move(index, index - 1);
+                } else if (event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  move(index, index + 1);
+                }
+              }}
             >
               ⋮⋮
             </span>
@@ -1717,10 +2051,14 @@ export default Object.assign(plugin, {
     SettingsPanel,
     STACK_LIFT_RULE,
     cwdOfSession,
+    dropIndexFor,
     iconGlyph,
     injectStyles,
     labelFor,
+    moveInOrder,
     openReadyUrl,
+    previewOffsets,
+    restTops,
     truncate,
     EN,
     ZH,
