@@ -1,0 +1,361 @@
+/**
+ * dsh-rundeck — host ↔ client 的 HTTP 桥。
+ *
+ * 为什么用 HTTP 路由而不是 Remote 服务：与 dsh-temptask 同一套既有做法——
+ * `ctx.webServer.register()` + 浏览器 `fetch()`。它只用公开 API，不需要 typert 生成物，
+ * 也不会往全局注册任何新服务。
+ *
+ * 安全模型（逐条照抄 dsh-temptask/src/routes.ts，因为它是同一个问题的同一份答案）：
+ *   - 只接受 loopback authority（127.0.0.1 / localhost / [::1]），或宿主 `connection`
+ *     服务声明的 trustedHosts；
+ *   - `sec-fetch-site: cross-site` 一律拒绝（防 DNS rebinding）；
+ *   - 带 Origin 的请求必须与 Host 同源；
+ *   - 变更类接口只接受 POST，且破坏性操作要求显式 confirm。
+ *
+ * 额外一条本插件特有的收紧：**没有任何接口接受自由命令**。
+ * host half 真要 spawn 进程时绕过的是 agent 的 pwsh 沙箱，所以这里只接受
+ * `{ projectRoot, entryId }` 这样的**指针**，命令本体永远来自项目里的 run.json。
+ */
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+import { renderCommandLine } from './exec.js';
+import type { RundeckManager } from './manager.js';
+import { ERROR_CODES, type ApiError, type ApiResult, type ButtonOverride } from './types.js';
+
+/** 路由前缀。 */
+export const API_PREFIX = '/dsh-rundeck/api';
+
+/** 请求体上限（这些接口的载荷都很小）。 */
+const MAX_BODY_BYTES = 16 * 1024;
+
+export interface RouteHost {
+  manager: RundeckManager;
+  /** 启动流程完成前不处理请求。 */
+  ready: Promise<void>;
+  /** 宿主声明的额外可信 authority。 */
+  trustedHosts(): string[];
+  log(level: 'info' | 'warn' | 'error', message: string): void;
+}
+
+export interface RundeckRoute {
+  path: string;
+  handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
+}
+
+/* ─────────────────────────── HTTP 工具 ─────────────────────────── */
+
+function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    'cache-control': 'no-store',
+    'content-type': 'application/json; charset=utf-8',
+  });
+  res.end(body);
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) throw new Error('请求体过大');
+    chunks.push(buffer);
+  }
+  if (size === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+/** 判断 Host 是否是 loopback authority。 */
+function isLoopbackAuthority(host: string): boolean {
+  const lower = host.toLowerCase();
+  const name = lower.startsWith('[')
+    ? lower.slice(0, lower.indexOf(']') + 1)
+    : (lower.split(':')[0] ?? '');
+  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]';
+}
+
+/** 请求是否可信（同源 + 非跨站 + loopback/已声明 authority）。 */
+function isTrustedRequest(req: IncomingMessage, trustedHosts: string[]): boolean {
+  const host = req.headers.host;
+  if (typeof host === 'string' && host.length > 0) {
+    const trusted =
+      isLoopbackAuthority(host) ||
+      trustedHosts.some((entry) => entry.toLowerCase() === host.toLowerCase());
+    if (!trusted) return false;
+  }
+  if (req.headers['sec-fetch-site'] === 'cross-site') return false;
+
+  const origin = req.headers.origin;
+  // 浏览器一定会带 Origin；缺失说明请求不是页面发出的。
+  if (origin === undefined) return true;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+function messageOfError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+/* ─────────────────────────── 路由构造 ─────────────────────────── */
+
+export function createRoutes(host: RouteHost): RundeckRoute[] {
+  const { manager } = host;
+
+  /**
+   * 统一的处理器包装：方法检查 + 同源检查 + 启动等待 + JSON 响应。
+   */
+  function route(
+    path: string,
+    method: 'GET' | 'POST',
+    impl: (body: Record<string, unknown>, req: IncomingMessage) => Promise<unknown>,
+  ): RundeckRoute {
+    return {
+      path,
+      async handle(req, res) {
+        try {
+          if ((req.method ?? 'GET').toUpperCase() !== method) {
+            res.setHeader('allow', method);
+            sendJson(res, 405, {
+              ok: false,
+              code: ERROR_CODES.badRequest,
+              message: `本接口只接受 ${method}`,
+            } satisfies ApiError);
+            return;
+          }
+          if (!isTrustedRequest(req, host.trustedHosts())) {
+            sendJson(res, 403, {
+              ok: false,
+              code: ERROR_CODES.badRequest,
+              message: 'untrusted origin：请求来源不是本机回环或已声明的 authority',
+            } satisfies ApiError);
+            return;
+          }
+
+          const body = method === 'POST' ? asObject(await readJsonBody(req)) : {};
+          await host.ready;
+          const result = await impl(body, req);
+          sendJson(res, 200, result);
+        } catch (error) {
+          host.log('warn', `${path} 处理失败：${messageOfError(error)}`);
+          sendJson(res, 200, {
+            ok: false,
+            code: ERROR_CODES.badRequest,
+            message: messageOfError(error),
+          } satisfies ApiError);
+        }
+      },
+    };
+  }
+
+  /** 取 query 参数。 */
+  function queryParams(req: IncomingMessage): URLSearchParams {
+    const url = req.url ?? '';
+    const query = url.indexOf('?');
+    return query < 0 ? new URLSearchParams() : new URLSearchParams(url.slice(query + 1));
+  }
+
+  /**
+   * 解析这一次请求的"焦点项目根目录"。
+   *
+   * 两条路，按可靠性排序：
+   *   1. `?cwd=`：客户端自己就知道会话的工作目录时直接给；
+   *   2. `?sessionId=`：**主路径**——客户端 `sessions` 服务没有 get/list，
+   *      浏览器侧拿不到 cwd，于是把插槽交给它的 sessionId 报上来，
+   *      host 先用内存会话存储的 `session.header.cwd` 解析；那条会话只是
+   *      "被查看"而没被激活时（重启后最常见）内存里没有它，就退到**会话目录**
+   *      （见 `sessionCwdAsync`）。这一步是异步的，因为会话目录是异步服务。
+   *
+   * 解析出目录后**先现读一遍磁盘**：不要求它先被注册成工作区，也不要求启动时的
+   * 扫描扫到它（启动那一刻 `workspaceRegistry` / `sessions` 可能都是空的）。
+   */
+  async function focusTargetFromQuery(req: IncomingMessage): Promise<string | null> {
+    const params = queryParams(req);
+    const rawCwd = (params.get('cwd') ?? '').trim();
+    const cwd =
+      rawCwd.length > 0
+        ? rawCwd
+        : await manager.sessionCwdAsync((params.get('sessionId') ?? '').trim());
+    if (cwd === null || cwd.trim().length === 0) return null;
+    await manager.ensureProject(cwd);
+    return cwd;
+  }
+
+  /** 从 body 里取一条指针；缺任何一个都返回错误。 */
+  function pointer(body: Record<string, unknown>): ApiResult<{ projectRoot: string; entryId: string }> {
+    const projectRoot = asString(body.projectRoot).trim();
+    const entryId = asString(body.entryId).trim();
+    if (projectRoot.length === 0 || entryId.length === 0) {
+      return {
+        ok: false,
+        code: ERROR_CODES.badRequest,
+        message: '需要 projectRoot 与 entryId',
+        hint: '命令本体来自 .dsh/run.json，本接口不接受自由命令。',
+      };
+    }
+    return { ok: true, projectRoot, entryId };
+  }
+
+  return [
+    // 客户端半边的诊断上报：**只写日志**，用来回答"包到底被浏览器加载了没有、
+    // 插槽到底渲染了没有"。之前这条链路完全没有观测点，只能靠猜。
+    route(`${API_PREFIX}/ping`, 'POST', async (body) => {
+      const stage = asString(body.stage).trim() || '(未命名)';
+      const detail = body.detail === undefined ? '' : ` ${JSON.stringify(body.detail)}`;
+      host.log('info', `client ping: ${stage}${detail}`);
+      return { ok: true, stage, at: Date.now() };
+    }),
+
+    // 全量状态。`?cwd=` / `?sessionId=` 决定焦点项目；
+    // 两者都没有 = 没有焦点项目（浮动层整条隐藏）。
+    route(`${API_PREFIX}/state`, 'GET', async (_body, req) =>
+      manager.state((await focusTargetFromQuery(req)) ?? undefined),
+    ),
+
+    // 重读磁盘上的清单（改了 .dsh/run.json 之后不必重启 DSH）。
+    route(`${API_PREFIX}/refresh`, 'POST', async () => {
+      const projects = await manager.refresh();
+      return { ok: true, projects };
+    }),
+
+    // 跑一条 run：**真的开一条 PTY 把命令跑起来**（见 src/exec.ts）。
+    // body 里只有指针（projectRoot + entryId）+ 发起会话的 sessionId，
+    // **没有任何字段能塞进一条命令**——这是安全边界，不是省略。
+    route(`${API_PREFIX}/run`, 'POST', async (body) => {
+      const target = pointer(body);
+      if (!target.ok) return target;
+      const sessionId = asString(body.sessionId).trim();
+      return manager.startRun({
+        projectRoot: target.projectRoot,
+        entryId: target.entryId,
+        ...(sessionId.length > 0 ? { sessionId } : {}),
+      });
+    }),
+
+    route(`${API_PREFIX}/stop`, 'POST', async (body) => {
+      const runId = asString(body.runId).trim();
+      if (runId.length === 0) {
+        return { ok: false, code: ERROR_CODES.badRequest, message: '缺少 runId' } satisfies ApiError;
+      }
+      return manager.stopRun(runId);
+    }),
+
+    route(`${API_PREFIX}/rerun`, 'POST', async (body) => {
+      const runId = asString(body.runId).trim();
+      if (runId.length === 0) {
+        return { ok: false, code: ERROR_CODES.badRequest, message: '缺少 runId' } satisfies ApiError;
+      }
+      return manager.rerun(runId);
+    }),
+
+    // 一行输出进来后推进钩子状态。返回**动作清单**（该打开哪个 URL、该接哪个 entry），
+    // host 不在这里执行它们——打开浏览器、拉起另一个 run 都需要调用方自己的权限。
+    // 本版 host 侧拿不到终端的 stdout，所以这个接口是给将来的流的 reader 用的；
+    // 语义层本身已经有完整测试覆盖。
+    route(`${API_PREFIX}/observe`, 'POST', async (body) => {
+      const runId = asString(body.runId).trim();
+      const line = asString(body.line);
+      if (runId.length === 0) {
+        return { ok: false, code: ERROR_CODES.badRequest, message: '缺少 runId' } satisfies ApiError;
+      }
+      return manager.observe(runId, line);
+    }),
+
+    // 一条 entry 的详情：声明 + host 侧算出的命令行。
+    // 存在的理由是让面板能说清"点了会跑什么"，而不是让用户点一个黑箱。
+    route(`${API_PREFIX}/entry`, 'POST', async (body) => {
+      const target = pointer(body);
+      if (!target.ok) return target;
+      const entry = manager.findEntry(target.projectRoot, target.entryId);
+      if (entry === undefined) {
+        return {
+          ok: false,
+          code: ERROR_CODES.notFound,
+          message: '找不到这个条目',
+          hint: `${target.projectRoot} 里没有 id 为 ${target.entryId} 的 task`,
+        } satisfies ApiError;
+      }
+      return { ok: true, entry, commandLine: renderCommandLine(entry) };
+    }),
+
+    // 浮动按钮的本地覆盖（布局类，不进仓库）。
+    // 只接受布局字段：entry / icon / group / label / order / pinned。
+    // 没有命令、没有 cwd、没有 args——本地覆盖不能变成第二条执行通路。
+    route(`${API_PREFIX}/button`, 'POST', async (body) => {
+      const entry = asString(body.entry).trim();
+      if (entry.length === 0) {
+        return { ok: false, code: ERROR_CODES.badRequest, message: '缺少 entry id' } satisfies ApiError;
+      }
+      const override: ButtonOverride = {
+        ...(asBoolean(body.pinned) ? { pinned: asBoolean(body.pinned) } : {}),
+        ...(typeof body.order === 'number' && Number.isFinite(body.order)
+          ? { order: body.order }
+          : {}),
+        ...(asString(body.group).length > 0 ? { group: asString(body.group) } : {}),
+        ...(asString(body.label).length > 0 ? { label: asString(body.label) } : {}),
+        ...(asString(body.icon).length > 0 ? { icon: asString(body.icon) } : {}),
+      };
+      return manager.setButtonOverride(entry, override);
+    }),
+
+    // 让一个磁盘上存在但没被扫到的目录成为焦点项目（"任意目录都能用"）。
+    // 接受 cwd，也接受 sessionId（由 host 的会话存储/会话目录解析出 cwd）。
+    route(`${API_PREFIX}/focus`, 'POST', async (body) => {
+      const rawCwd = asString(body.cwd).trim();
+      const cwd =
+        (rawCwd.length > 0
+          ? rawCwd
+          : await manager.sessionCwdAsync(asString(body.sessionId).trim())) ?? '';
+      if (cwd.length === 0) {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: '缺少 cwd（或能解析出 cwd 的 sessionId）',
+        } satisfies ApiError;
+      }
+      return manager.focusCwd(cwd);
+    }),
+
+    // 拖拽排序：整组顺序写进本地覆盖。只接受 id 数组，不接受命令。
+    route(`${API_PREFIX}/reorder`, 'POST', async (body) => {
+      const order = Array.isArray(body.order)
+        ? body.order.filter((value): value is string => typeof value === 'string' && value.length > 0)
+        : [];
+      if (order.length === 0) {
+        return { ok: false, code: ERROR_CODES.badRequest, message: '缺少 order（entry id 数组）' } satisfies ApiError;
+      }
+      return manager.reorderButtons(order);
+    }),
+
+    // 按钮密度偏好（full / compact / icon），持久化到 layout.json。
+    route(`${API_PREFIX}/density`, 'POST', async (body) => {
+      const density = asString(body.density).trim();
+      if (density !== 'full' && density !== 'compact' && density !== 'icon') {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: 'density 只能是 full / compact / icon',
+        } satisfies ApiError;
+      }
+      return manager.setDensity(density);
+    }),
+  ];
+}

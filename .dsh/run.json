@@ -1,0 +1,56 @@
+{
+  // dsh-rundeck 自己的启动项（dogfood：用本插件跑本插件的检查）。
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "全量检查",
+      "id": "rundeck/check",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "check"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": false,
+      "group": "build",
+      "presentation": { "panel": "dedicated", "reveal": "always", "clear": true }
+    },
+    {
+      "label": "重建客户端包",
+      "id": "rundeck/build-client",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "build:client"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": false,
+      "group": "build",
+      "presentation": { "panel": "dedicated", "reveal": "always", "clear": true }
+    },
+    {
+      "label": "host 冒烟",
+      "id": "rundeck/smoke",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "smoke:host"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": false,
+      "group": "test",
+      "presentation": { "panel": "dedicated", "reveal": "always", "clear": true }
+    },
+    {
+      "label": "安装自检",
+      "id": "rundeck/installcheck",
+      "type": "shell",
+      "command": "node",
+      "args": ["_probe/run/installcheck.mjs"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": false,
+      "group": "test",
+      "presentation": { "panel": "dedicated", "reveal": "always", "clear": true }
+    }
+  ],
+  "buttons": [
+    { "entry": "rundeck/check", "icon": "hammer", "group": "检查", "order": 10 },
+    { "entry": "rundeck/build-client", "icon": "play", "group": "检查", "order": 20 },
+    { "entry": "rundeck/smoke", "icon": "eye", "group": "测试", "order": 30 },
+    { "entry": "rundeck/installcheck", "icon": "server", "group": "测试", "order": 40 }
+  ]
+}

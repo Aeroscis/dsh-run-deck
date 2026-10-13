@@ -1,0 +1,19 @@
+# dsh-rundeck — bundle patch：插入本插件的 host 插件行。
+#
+# 这是一个「补丁层」文件：`dsh plugin add` 把它所在的包登记进 profile 的 bundles，
+# DSH 启动时按 cordis.yml 的合并规则应用本文件，于是插件被挂载。
+#
+# 行内 `name` 必须是**包名**（加载器按它 import）；`id` 是稳定的行标识，
+# 不随包名变化（设置命名空间、HTTP 前缀、数据目录都沿用它）。
+#
+# 可选：在行内直接给出初始配置（会被设置页的 `dsh-rundeck` 命名空间覆盖）：
+#
+#   - insert:
+#       - id: dsh-rundeck
+#         name: '@aeroscis/dsh-rundeck'
+#         config:
+#           configPath: ''            # 项目根目录清单，留空 = <pluginDataDir>/run.json
+#
+- insert:
+    - id: dsh-rundeck
+      name: '@aeroscis/dsh-rundeck'

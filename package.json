@@ -1,0 +1,88 @@
+{
+  "name": "@aeroscis/dsh-rundeck",
+  "version": "0.1.0",
+  "description": "DSH Run Configuration：按项目根目录 .dsh/run.json 里声明的条目跑/停/重跑，附可钉住的浮动按钮。Vocabulary 照抄 VS Code tasks.json。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "src",
+    "scripts",
+    "cordis.patch.yml",
+    "tsconfig.json",
+    "tsconfig.client.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "run-configuration",
+    "tasks",
+    "launcher"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Aeroscis",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aeroscis/dsh-rundeck.git"
+  },
+  "homepage": "https://github.com/Aeroscis/dsh-rundeck#readme",
+  "bugs": {
+    "url": "https://github.com/Aeroscis/dsh-rundeck/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": "^0.1.5-rc.2 || ^0.2.0-rc.1"
+  },
+  "scripts": {
+    "build": "npm run build:host && npm run build:client",
+    "build:host": "tsc -p tsconfig.json",
+    "build:client": "tsc -p tsconfig.client.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "prepare": "node scripts/prepare.mjs",
+    "prepack": "node scripts/check-pack.mjs",
+    "check:pack": "node scripts/check-pack.mjs",
+    "smoke": "npm run smoke:host && npm run smoke:client",
+    "smoke:host": "node scripts/smoke.mjs",
+    "smoke:client": "node scripts/smoke-client.mjs",
+    "check:registration": "node scripts/check-registration.mjs",
+    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "^0.1.5-rc.2 || ^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-settings": "^0.1.5-rc.2 || ^0.2.0-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "~18.3.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^7.0.2"
+  }
+}

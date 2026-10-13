@@ -1,0 +1,17 @@
+node_modules/
+build/
+*.tsbuildinfo
+.DS_Store
+*.tgz
+
+# 构建产物：lib/（tsc 输出）与 client/client.js（打包输出）都由 `npm run build` 生成，
+# 不进仓库（npm 发布时由 prepack 现场构建）。
+lib/
+client/client.js
+
+# 本机工具留下的杂物
+debug.log
+.workbuddy/
+
+# local scratch directories
+_*/
