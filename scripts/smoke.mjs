@@ -10,7 +10,7 @@
  * 运行：`node scripts/smoke.mjs`（与 `npm run smoke:host` 等同）。
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,6 +24,9 @@ const { resolveServerReady, resolveOnReady, wouldCycle, initialHookState, observ
 const { dispatchToolArgs, TOOL_NAME } = await import(new URL('../lib/tool.js', import.meta.url));
 const { readLayout, writeLayout, effectiveButtons, coerceLayout } = await import(
   new URL('../lib/store.js', import.meta.url)
+);
+const { splitCommandLine, insertTaskIntoManifestText, removeTaskFromManifestText } = await import(
+  new URL('../lib/manifest-edit.js', import.meta.url)
 );
 
 let passed = 0;
@@ -237,6 +240,133 @@ await check('本地覆盖只影响展示，不改命令', () => {
   assert.equal(effective[0]?.icon, 'hammer');
   // effectiveButtons 里没有任何字段能改 command / args / cwd
   assert.deepEqual(Object.keys(effective[0] ?? {}).sort(), ['entry', 'group', 'icon', 'label', 'order']);
+});
+
+await check('pinned:true 的覆盖把没上条的条目添加上来（钉到按钮条）', () => {
+  const declared = [{ entry: 'a', order: 10 }];
+  const effective = effectiveButtons(
+    declared,
+    // b：显式 order 照常生效；c：新钉上来的默认垫底（1000 + 任务序号）；d：没钉不上条
+    { buttons: { b: { pinned: true, order: 5 }, c: { pinned: true }, d: { order: 1 } } },
+    [{ entry: 'a' }, { entry: 'b' }, { entry: 'c' }, { entry: 'd' }],
+  );
+  assert.deepEqual(effective.map((button) => button.entry), ['b', 'a', 'c']);
+  assert.equal(effective[0]?.order, 5);
+  assert.equal(effective[2]?.order, 1002);
+  // 添加到条上的命令仍然来自 run.json 的 task：effectiveButtons 只产出展示字段
+  assert.deepEqual(Object.keys(effective[2] ?? {}).sort(), ['entry', 'group', 'icon', 'order']);
+});
+
+await check('没给 entries 时 pinned:true 的覆盖拿不到条目（保持旧行为）', () => {
+  const declared = [{ entry: 'a', order: 10 }];
+  const effective = effectiveButtons(declared, { buttons: { b: { pinned: true } } });
+  assert.deepEqual(effective.map((button) => button.entry), ['a']);
+});
+
+/* ── 界面新建启动项：写回 run.json（和手改同一个文件） ── */
+
+await check('splitCommandLine：按引号拆成 command + args', () => {
+  assert.deepEqual(splitCommandLine('npm run dev'), { ok: true, tokens: ['npm', 'run', 'dev'] });
+  assert.deepEqual(splitCommandLine('node "my script.js" --x=1'), {
+    ok: true,
+    tokens: ['node', 'my script.js', '--x=1'],
+  });
+  assert.deepEqual(splitCommandLine("sh -c 'echo hi'"), {
+    ok: true,
+    tokens: ['sh', '-c', 'echo hi'],
+  });
+  assert.deepEqual(splitCommandLine('  npm   run   dev  '), { ok: true, tokens: ['npm', 'run', 'dev'] });
+  assert.equal(splitCommandLine('npm "oops').ok, false, '引号不闭合要报错，不能猜');
+});
+
+await check('insertTaskIntoManifestText：追加 task 且原样保留注释与已有条目', () => {
+  const text = [
+    '{',
+    '  // 手写的注释要留着',
+    '  "version": "2.0.0",',
+    '  "tasks": [',
+    '    { "label": "a", "command": "node", "args": ["-v"] }',
+    '  ]',
+    '}',
+    '',
+  ].join('\n');
+  const result = insertTaskIntoManifestText(text, {
+    label: 'b',
+    command: 'npm',
+    args: ['run', 'dev'],
+    id: 'b',
+  });
+  assert.equal(result.ok, true);
+  const parsed = JSON.parse(stripJsonComments(result.text));
+  assert.equal(parsed.tasks.length, 2);
+  assert.deepEqual(parsed.tasks[1], { label: 'b', command: 'npm', args: ['run', 'dev'], id: 'b' });
+  assert.ok(result.text.includes('// 手写的注释要留着'), '注释不能被抹掉');
+  assert.ok(result.text.includes('"-v"'), '已有条目要原样保留');
+});
+
+await check('insertTaskIntoManifestText：空 tasks / 没有 tasks 键 / 坏清单', () => {
+  const empty = insertTaskIntoManifestText('{\n  "tasks": []\n}', { label: 'x', command: 'node' });
+  assert.equal(empty.ok, true);
+  assert.equal(JSON.parse(stripJsonComments(empty.text)).tasks.length, 1);
+
+  const noTasks = insertTaskIntoManifestText('{\n  "version": "2.0.0"\n}', {
+    label: 'x',
+    command: 'node',
+  });
+  assert.equal(noTasks.ok, true);
+  const parsedNoTasks = JSON.parse(stripJsonComments(noTasks.text));
+  assert.equal(parsedNoTasks.version, '2.0.0', '原有字段不能丢');
+  assert.equal(parsedNoTasks.tasks.length, 1);
+
+  // 末尾挂着行注释时（收空白会把逗号卷进注释里），要能换位置插成功
+  const trailingComment = insertTaskIntoManifestText(
+    '{\n  "tasks": [\n    { "label": "a", "command": "node" } // 末尾注释\n  ]\n}',
+    { label: 'b', command: 'node' },
+  );
+  assert.equal(trailingComment.ok, true);
+  assert.equal(JSON.parse(stripJsonComments(trailingComment.text)).tasks.length, 2);
+
+  assert.equal(insertTaskIntoManifestText('{ tasks: ', { label: 'x', command: 'node' }).ok, false);
+});
+
+await check('removeTaskFromManifestText：删任务、清悬空 buttons[]、注释保留', () => {
+  const text = [
+    '{',
+    '  // 手写注释',
+    '  "tasks": [',
+    '    { "label": "a", "id": "a", "command": "node" },',
+    '    { "label": "b", "id": "b", "command": "node" },',
+    '    { "label": "c", "id": "c", "command": "node" }',
+    '  ],',
+    '  "buttons": [',
+    '    { "entry": "b", "icon": "eye" },',
+    '    { "entry": "c", "icon": "play" }',
+    '  ]',
+    '}',
+    '',
+  ].join('\n');
+
+  const middle = removeTaskFromManifestText(text, 'b');
+  assert.equal(middle.ok, true);
+  const parsedMiddle = JSON.parse(stripJsonComments(middle.text));
+  assert.deepEqual(parsedMiddle.tasks.map((task) => task.id), ['a', 'c']);
+  assert.deepEqual(parsedMiddle.buttons.map((button) => button.entry), ['c'], '悬空的按钮声明要一起清掉');
+  assert.ok(middle.text.includes('// 手写注释'), '注释要保留');
+
+  const last = removeTaskFromManifestText(text, 'c');
+  assert.deepEqual(JSON.parse(stripJsonComments(last.text)).tasks.map((t) => t.id), ['a', 'b']);
+  const first = removeTaskFromManifestText(text, 'a');
+  assert.deepEqual(JSON.parse(stripJsonComments(first.text)).tasks.map((t) => t.id), ['b', 'c']);
+
+  const single = removeTaskFromManifestText(
+    '{ "tasks": [ { "label": "x", "id": "x", "command": "node" } ] }',
+    'x',
+  );
+  assert.equal(single.ok, true);
+  assert.equal(JSON.parse(stripJsonComments(single.text)).tasks.length, 0);
+
+  assert.equal(removeTaskFromManifestText(text, 'nope').ok, false, '不存在的 id 要报错');
+  assert.equal(removeTaskFromManifestText('{ broken', 'x').ok, false, '坏清单要拒绝');
 });
 
 /* ── 完整样例（需求里给的那一份） ── */
@@ -933,6 +1063,507 @@ await check('本地覆盖 pinned:false 只隐藏按钮，不删条目', async ()
   assert.equal(started.ok, true, '本地覆盖不该影响执行');
 });
 
+await check('「钉到按钮条」能把没进 buttons[] 的 task 添加上条，也能再收回去', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  writeFileSync(
+    join(dir, '.dsh', 'run.json'),
+    JSON.stringify({
+      version: '2.0.0',
+      tasks: [
+        { label: 'web', id: 'a/web', command: 'python' },
+        { label: 'desk', id: 'a/desk', command: 'python' },
+      ],
+      buttons: [{ entry: 'a/web', icon: 'eye' }],
+    }),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btndata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+  // 起初只有声明过的一条
+  assert.equal(manager.listButtons().length, 1);
+
+  // `+` 面板的"钉到按钮条"：把 a/desk 添加上条
+  const add = await manager.setButtonOverride('a/desk', { pinned: true });
+  assert.equal(add.ok, true);
+  const buttons = manager.listButtons();
+  assert.equal(buttons.length, 2, '钉上之后浮动层应该多一颗');
+  const deskButton = buttons.find((button) => button.entry === 'a/desk');
+  assert.ok(deskButton, '钉上之后应该找得到 a/desk');
+  assert.equal(deskButton?.entryLabel, 'desk', '命令/标题仍来自 run.json 的 task');
+
+  // 再点一次（收起）：从浮动层消失，条目本身还在
+  const hide = await manager.setButtonOverride('a/desk', { pinned: false });
+  assert.equal(hide.ok, true);
+  assert.equal(manager.listButtons().length, 1, '收起后浮动层剩声明过的那条');
+  assert.equal(manager.listProjects()[0]?.entries.length, 2, '条目不删，仍能被 run');
+});
+
+await check('/button 走 HTTP 也认 `pinned: false`（收起不是空操作）', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btnwire-'));
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  writeFileSync(
+    join(dir, '.dsh', 'run.json'),
+    JSON.stringify({
+      version: '2.0.0',
+      tasks: [
+        { label: 'web', id: 'a/web', command: 'python' },
+        { label: 'desk', id: 'a/desk', command: 'python' },
+      ],
+      buttons: [{ entry: 'a/web' }],
+    }),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btnwiredata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+  const routes = createRoutes({
+    manager,
+    ready: Promise.resolve(),
+    trustedHosts: () => [],
+    log: () => {},
+  });
+  const path = '/dsh-rundeck/api/button';
+
+  const added = await callRoute(routes, path, '', {
+    method: 'POST',
+    body: { entry: 'a/desk', pinned: true },
+  });
+  assert.equal(added.ok, true);
+  assert.equal(manager.listButtons().length, 2, '钉上：浮动层多一颗');
+
+  const hidden = await callRoute(routes, path, '', {
+    method: 'POST',
+    body: { entry: 'a/desk', pinned: false },
+  });
+  assert.equal(hidden.ok, true);
+  assert.equal(manager.listButtons().length, 1, 'pinned:false 必须真的收起（早先被整段丢掉）');
+  assert.equal(
+    manager.getLayout().buttons['a/desk']?.pinned,
+    false,
+    '落盘的是显式 false，不是"没给这个字段"',
+  );
+});
+
+await check('手改 layout.json 会在下次同步时生效（不用重启）', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-layoutsync-'));
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  writeFileSync(
+    join(dir, '.dsh', 'run.json'),
+    JSON.stringify({
+      version: '2.0.0',
+      tasks: [
+        { label: 'web', id: 'a/web', command: 'python' },
+        { label: 'desk', id: 'a/desk', command: 'python' },
+      ],
+    }),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-layoutsyncdata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+  // 没写 buttons[] → 全部条目自动上条
+  assert.equal(manager.listButtons().length, 2);
+
+  // 外部手改：收起 a/web（显式把 mtime 拨到未来，避免同毫秒写撞车）
+  const layoutFile = join(dataDir, 'layout.json');
+  writeFileSync(layoutFile, JSON.stringify({ buttons: { 'a/web': { pinned: false } } }), 'utf8');
+  const bumped = new Date(Date.now() + 5000);
+  utimesSync(layoutFile, bumped, bumped);
+  await manager.syncLayoutFromDisk();
+  assert.deepEqual(
+    manager.listButtons().map((button) => button.entry),
+    ['a/desk'],
+    '手改的收起要生效（不必重启 DSH）',
+  );
+
+  // 再改回来：全部恢复
+  writeFileSync(layoutFile, JSON.stringify({ buttons: {} }), 'utf8');
+  const bumpedAgain = new Date(Date.now() + 10000);
+  utimesSync(layoutFile, bumpedAgain, bumpedAgain);
+  await manager.syncLayoutFromDisk();
+  assert.equal(manager.listButtons().length, 2, '改回来也要立刻生效');
+});
+
+await check('界面新建启动项：真的写进 run.json 的 tasks[]，条目立刻可用', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-newtask-'));
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run.json');
+  writeFileSync(
+    manifestPath,
+    [
+      '{',
+      '  // 人写的注释',
+      '  "version": "2.0.0",',
+      '  "tasks": [',
+      '    { "label": "web", "id": "web", "command": "python" }',
+      '  ]',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-newtaskdata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+
+  const created = await manager.createTask(dir, { label: 'Dev server', command: 'npm run dev' });
+  assert.equal(created.ok, true);
+  if (!created.ok) return;
+  const text = readFileSync(manifestPath, 'utf8');
+  assert.ok(text.includes('// 人写的注释'), '注释要保留（手改和界面写的是同一个文件）');
+  const parsed = JSON.parse(stripJsonComments(text));
+  assert.equal(parsed.tasks.length, 2);
+  assert.deepEqual(parsed.tasks[1], {
+    label: 'Dev server',
+    id: 'dev-server',
+    command: 'npm',
+    args: ['run', 'dev'],
+  });
+
+  // 项目被立刻重读：新条目马上出现在条目列表里，界面不用等下一轮轮询
+  const project = manager.listProjects()[0];
+  assert.ok(project?.entries.some((entry) => entry.id === 'dev-server'));
+
+  // 建完就能钉上条（"加一个按钮"的完整意图）
+  await manager.setButtonOverride('dev-server', { pinned: true });
+  assert.ok(manager.listButtons().some((button) => button.entry === 'dev-server'));
+
+  // 非法输入：拒绝，且**不许动文件**
+  assert.equal((await manager.createTask(dir, { label: '  ', command: 'npm' })).ok, false);
+  assert.equal((await manager.createTask(dir, { label: 'x', command: 'echo a\necho b' })).ok, false);
+  assert.equal(
+    JSON.parse(stripJsonComments(readFileSync(manifestPath, 'utf8'))).tasks.length,
+    2,
+    '失败的调用不能改文件',
+  );
+
+  // 同名再建一次：id 唯一化，不会互相覆盖
+  const again = await manager.createTask(dir, { label: 'Dev server', command: 'node server.js' });
+  assert.equal(again.ok, true);
+  if (!again.ok) return;
+  assert.notEqual(again.entry, created.entry);
+});
+
+await check('空目录也能建第一条：没有 .dsh/run.json 时自动创建', async () => {  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-firsttask-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-firsttaskdata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+  await manager.ensureProject(dir);
+
+  // 空目录也是焦点：条一直在，只是没有按钮（不该变成"没有焦点"）
+  const before = manager.state(dir);
+  assert.equal(before.focused?.projectRoot, dir.replaceAll('\\', '/'));
+  assert.match(before.focused?.reason ?? '', /还没有 \.dsh\/run\.json/);
+  assert.deepEqual(before.buttons, []);
+  assert.deepEqual(before.focusedEntries, []);
+
+  // 界面上建第一条：清单文件自动创建（"不想手写配置文件"的出路）
+  const created = await manager.createTask(dir, { label: 'Hello', command: 'node -e console.log(1)' });
+  assert.equal(created.ok, true);
+  if (!created.ok) return;
+  const manifest = join(dir, '.dsh', 'run.json');
+  assert.ok(existsSync(manifest), '.dsh/run.json 要自动创建出来');
+  const parsed = JSON.parse(stripJsonComments(readFileSync(manifest, 'utf8')));
+  assert.deepEqual(parsed.tasks[0], {
+    label: 'Hello',
+    id: 'hello',
+    command: 'node',
+    args: ['-e', 'console.log(1)'],
+  });
+  assert.equal(manager.state(dir).focusedEntries.length, 1, '建完立刻能出现在条目列表里');
+});
+
+await check('新增条目：工作目录 / 环境变量 / 长驻 / 就绪正则 / 打开地址 全部落进清单', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-rich-task-'));
+  mkdirSync(join(dir, 'apps', 'web'), { recursive: true });
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run.json');
+  writeFileSync(
+    manifestPath,
+    ['{', '  // 人写的注释', '  "version": "2.0.0",', '  "tasks": []', '}', ''].join('\n'),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-richtaskdata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+
+  const created = await manager.createTask(dir, {
+    label: 'Web dev',
+    command: 'pnpm run dev',
+    cwd: 'apps/web',
+    env: { PORT: '3000', NODE_ENV: 'development' },
+    isBackground: true,
+    group: 'build',
+    readyPattern: 'Local:\\s+(https?://\\S+)',
+    openUrl: true,
+    uriFormat: '%s',
+    reveal: 'always',
+    id: 'web-dev',
+  });
+  assert.equal(created.ok, true, created.ok ? '' : created.message);
+  if (!created.ok) return;
+  assert.equal(created.entry, 'web-dev');
+
+  const text = readFileSync(manifestPath, 'utf8');
+  assert.ok(text.includes('// 人写的注释'), '注释要保留（手改和界面写的是同一个文件）');
+  const parsed = JSON.parse(stripJsonComments(text));
+  assert.deepEqual(parsed.tasks[0], {
+    label: 'Web dev',
+    id: 'web-dev',
+    command: 'pnpm',
+    args: ['run', 'dev'],
+    options: { cwd: 'apps/web', env: { PORT: '3000', NODE_ENV: 'development' } },
+    isBackground: true,
+    problemMatcher: { background: { endsPattern: 'Local:\\s+(https?://\\S+)' } },
+    serverReadyAction: {
+      action: 'openExternally',
+      pattern: 'Local:\\s+(https?://\\S+)',
+      uriFormat: '%s',
+    },
+    presentation: { reveal: 'always' },
+    group: 'build',
+  });
+  // 多字段条目写成"一字段一行"：一行会横到屏幕外，但必须仍然是同一条合法 JSON
+  assert.match(text, /\{\n\s+"label": "Web dev",\n\s+"id": "web-dev",/u);
+
+  // 写进去的东西必须能被读取链路原样读回来（不是"只写进文件、界面读不到"）
+  const entry = manager
+    .listProjects()[0]
+    ?.entries.find((candidate) => candidate.id === 'web-dev');
+  assert.ok(entry !== undefined, '新条目应该能被解析出来');
+  // 相对 cwd 相对项目根解析成绝对路径——spawn 拿到的是这个字符串，
+  // 而 host 进程的工作目录不是项目根目录。
+  assert.equal(entry?.cwd, `${dir.replaceAll('\\', '/')}/apps/web`);
+  assert.equal(entry?.isBackground, true);
+  assert.equal(entry?.serverReadyAction?.pattern, 'Local:\\s+(https?://\\S+)');
+  assert.equal(entry?.raw?.options?.cwd, 'apps/web', 'raw 保留原样（复制时不能用展开后的绝对路径）');
+});
+
+await check('新增条目的字段校验：坏正则 / 不存在目录 / 坏变量名 / id 撞车 / onReady 都不落盘', async () => {
+  const { buildTaskEntry } = await import(new URL('../lib/newtask.js', import.meta.url));
+  const context = {
+    root: 'D:/p',
+    entries: [
+      {
+        id: 'web',
+        label: 'web',
+        type: 'shell',
+        command: 'python',
+        args: [],
+        cwd: 'D:/p',
+        isBackground: false,
+        group: 'none',
+      },
+    ],
+    directoryExists: async (path) => path.replaceAll('\\', '/') === 'D:/p/apps/web',
+  };
+  const base = { label: 'x', command: 'node server.js' };
+  const cases = [
+    [{ ...base, readyPattern: '(unclosed' }, /就绪正则写错了/u],
+    [{ ...base, cwd: 'apps/nope' }, /工作目录不存在/u],
+    [{ ...base, env: { '1BAD': 'x' } }, /环境变量名不合法/u],
+    [{ ...base, env: { OK: 'a\nb' } }, /不能有换行/u],
+    [{ ...base, id: 'web' }, /已被这个项目里的另一条占用/u],
+    [{ ...base, id: 'has space' }, /只能由字母/u],
+    [{ ...base, onReady: 'nope' }, /指向不存在的条目/u],
+    [{ ...base, onReady: 'x' }, /不能指向自己/u],
+    [{ ...base, openUrl: true }, /就得给一条 URL 正则/u],
+    [{ ...base, openUrl: true, urlPattern: '(u', }, /URL 正则写错了/u],
+    [{ ...base, openUrl: true, urlPattern: '(u)', uriFormat: 'http://x' }, /必须有 %s/u],
+    [{ ...base, label: 'a\nb' }, /控制字符/u],
+    [{ label: 'x', command: '"unclosed' }, /没有闭合/u],
+  ];
+  for (const [input, pattern] of cases) {
+    const result = await buildTaskEntry(input, context);
+    assert.equal(result.ok, false, `本该拒绝：${JSON.stringify(input)}`);
+    assert.match(String(result.ok ? '' : result.message), pattern);
+  }
+
+  // 合法的一条：cwd 存在、id 自动派生、onReady 指向已有条目
+  const good = await buildTaskEntry(
+    {
+      ...base,
+      cwd: 'apps/web',
+      env: { PORT: '3000' },
+      isBackground: true,
+      readyPattern: '(https?://\\S+)',
+      openUrl: true,
+      reveal: 'always',
+      group: 'build',
+      onReady: 'web',
+    },
+    context,
+  );
+  assert.equal(good.ok, true, good.ok ? '' : good.message);
+  if (!good.ok) return;
+  assert.equal(good.entryId, 'x');
+  assert.deepEqual(good.task, {
+    label: 'x',
+    id: 'x',
+    command: 'node',
+    args: ['server.js'],
+    options: { cwd: 'apps/web', env: { PORT: '3000' } },
+    isBackground: true,
+    problemMatcher: { background: { endsPattern: '(https?://\\S+)' } },
+    serverReadyAction: { action: 'openExternally', pattern: '(https?://\\S+)' },
+    presentation: { reveal: 'always' },
+    group: 'build',
+    onReady: 'web',
+  });
+});
+
+await check('检测候选：读 package.json 的 scripts，猜包管理器 / 长驻 / 分组，并标出"已在清单"', async () => {
+  const { detectTasks } = await import(new URL('../lib/detect.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-detect-'));
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'demo',
+      scripts: { dev: 'vite', build: 'tsc -b', 'test:unit': 'vitest', 'watch:css': 'sass --watch a:b' },
+    }),
+    'utf8',
+  );
+  writeFileSync(join(dir, 'pnpm-lock.yaml'), '', 'utf8');
+  const entries = [
+    {
+      id: 'dev',
+      label: 'dev',
+      type: 'shell',
+      command: 'pnpm',
+      args: ['run', 'dev'],
+      cwd: dir,
+      isBackground: true,
+      group: 'none',
+    },
+  ];
+  const result = await detectTasks(dir, entries);
+  assert.equal(result.packageManager, 'pnpm', '锁文件说了用 pnpm');
+
+  const byKey = new Map(result.candidates.map((candidate) => [candidate.key, candidate]));
+  const dev = byKey.get('package.json:dev');
+  assert.ok(dev !== undefined);
+  assert.equal(dev.command, 'pnpm run dev');
+  assert.equal(dev.exists, true, '清单里已有同命令的条目要标出来');
+  assert.equal(dev.preset.isBackground, true, 'dev 这类脚本猜成"长驻"');
+  assert.match(String(dev.preset.readyPattern), /https\?/u);
+  assert.equal(byKey.get('package.json:build')?.preset.group, 'build');
+  assert.equal(byKey.get('package.json:build')?.preset.isBackground, undefined);
+  assert.equal(byKey.get('package.json:test:unit')?.preset.group, 'test');
+  // 模板永远在：目录里什么都没有时也有东西可点
+  assert.ok(result.candidates.some((candidate) => candidate.source === 'template'));
+
+  // 没有 package.json 的目录：**不是告警**，只是没有可检测的脚本；模板仍然在。
+  const empty = mkdtempSync(join(tmpdir(), 'rundeck-detect-empty-'));
+  const none = await detectTasks(empty, []);
+  assert.equal(none.warnings.length, 0, '没有 package.json 是正常空状态，不该进告警');
+  assert.ok(none.candidates.every((candidate) => candidate.source === 'template'));
+
+  // 文件在但读不了/不是合法 JSON：这才是告警（界面要说清"为什么没检测到"）
+  writeFileSync(join(empty, 'package.json'), '{ not json', 'utf8');
+  const broken = await detectTasks(empty, []);
+  assert.ok(broken.warnings.some((warning) => warning.includes('不是合法 JSON')));
+});
+
+await check('界面删除条目：真的从 run.json 移除（含悬空 buttons[] 与本地覆盖）', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-deltask-'));
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run.json');
+  writeFileSync(
+    manifestPath,
+    [
+      '{',
+      '  // 手写注释',
+      '  "version": "2.0.0",',
+      '  "tasks": [',
+      '    { "label": "web", "id": "web", "command": "python" },',
+      '    { "label": "desk", "id": "desk", "command": "python" }',
+      '  ],',
+      '  "buttons": [',
+      '    { "entry": "web", "icon": "eye" },',
+      '    { "entry": "desk", "icon": "desk" }',
+      '  ]',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-deltaskdata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+  await manager.setButtonOverride('web', { pinned: true, order: 1 });
+  assert.equal(manager.getLayout().buttons['web']?.order, 1);
+
+  const removed = await manager.deleteTask(dir, 'web');
+  assert.equal(removed.ok, true);
+
+  const text = readFileSync(manifestPath, 'utf8');
+  assert.ok(text.includes('// 手写注释'), '注释要保留');
+  const parsed = JSON.parse(stripJsonComments(text));
+  assert.deepEqual(parsed.tasks.map((task) => task.id), ['desk']);
+  assert.deepEqual(parsed.buttons.map((button) => button.entry), ['desk'], '指向被删条目的按钮声明也要清掉');
+
+  // 项目被重读：条目没了；本机布局里的覆盖也没了
+  assert.deepEqual(manager.listProjects()[0]?.entries.map((entry) => entry.id), ['desk']);
+  assert.equal(manager.getLayout().buttons['web'], undefined);
+
+  // 删不存在的条目：报错且不动文件
+  const missing = await manager.deleteTask(dir, 'nope');
+  assert.equal(missing.ok, false);
+  assert.equal(JSON.parse(stripJsonComments(readFileSync(manifestPath, 'utf8'))).tasks.length, 1);
+});
+
 await check('本地覆盖只改展示字段，写不进 command/args/cwd', async () => {
   const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
@@ -1196,14 +1827,15 @@ await check('focusCwd 让任意目录成为焦点（无需注册成工作区）'
   assert.equal(manager.state(dir).buttons.length, 1);
 });
 
-await check('focusCwd 对没有 manifest 的目录返回 reason，不抛错', async () => {
+await check('focusCwd 对没有 manifest 的目录：仍是焦点，并说明原因', async () => {
   const manager = await makeDetachedManager();
   const dir = mkdtempSync(join(tmpdir(), 'rundeck-empty-'));
   const result = await manager.focusCwd(dir);
   assert.equal(result.ok, true);
   if (result.ok) {
-    assert.equal(result.focused.projectRoot, null);
-    assert.ok(result.focused.reason !== undefined && result.focused.reason.length > 0);
+    // 条要一直在：空目录也算焦点，`+` 才有地方建第一条（而不是"没有焦点"整条消失）
+    assert.equal(result.focused.projectRoot, dir.replaceAll('\\', '/'));
+    assert.match(result.focused.reason ?? '', /还没有 \.dsh\/run\.json/);
   }
 });
 
@@ -1264,15 +1896,23 @@ function fakeResponse() {
 }
 
 /** 走一次真实的路由（method/url/headers 都是真实形状），返回解析后的 JSON。 */
-async function callRoute(routes, path, query) {
+async function callRoute(routes, path, query, options = {}) {
   const route = routes.find((candidate) => candidate.path === path);
   assert.ok(route !== undefined, `没有注册 ${path}`);
   const res = fakeResponse();
+  const payload = options.body === undefined ? null : JSON.stringify(options.body);
   await route.handle(
     {
-      method: 'GET',
+      method: options.method ?? 'GET',
       url: `${path}${query ?? ''}`,
       headers: { host: '127.0.0.1:43120' },
+      ...(payload === null
+        ? {}
+        : {
+            async *[Symbol.asyncIterator]() {
+              yield Buffer.from(payload, 'utf8');
+            },
+          }),
     },
     res,
   );
@@ -1509,7 +2149,7 @@ await check('清单被改过时自动重读（不用重启、也不用知道 /ru
   assert.equal(logs.filter((line) => line.includes('清单变了，已重读')).length, 1);
 });
 
-await check('清单被删掉时把过期的项目换掉（条隐藏，而不是留着旧按钮）', async () => {
+await check('清单被删掉时把过期的项目换掉（不再留旧按钮，但仍是焦点）', async () => {
   const { manager, dir, root } = await makeManager(MANIFEST_3);
   await manager.ensureProject(root);
   assert.equal(manager.state(root).buttons.length, 3);
@@ -1517,8 +2157,8 @@ await check('清单被删掉时把过期的项目换掉（条隐藏，而不是�
   await manager.ensureProject(root);
   const after = manager.state(root);
   assert.deepEqual(after.buttons, [], '文件没了就不该还留着上一次的按钮');
-  assert.equal(after.focused.projectRoot, root, '目录本身还在，只是"没有可用条目"');
-  assert.match(after.focused.reason ?? '', /没有可用条目/);
+  assert.equal(after.focused.projectRoot, root, '目录本身还在，条也要在（+ 可以重新建条目）');
+  assert.match(after.focused.reason ?? '', /还没有 \.dsh\/run\.json/);
 });
 
 await check('/state?sessionId= 端到端：会话 → 项目 → 按钮（这是浮动条的主路径）', async () => {
@@ -1772,6 +2412,11 @@ await check('输出轮询：就绪 pattern → ready + 打开地址 + onReady �
   assert.equal(desk.ready.url, 'app.exe');
   // 最近几行输出留在记录里（面板要说清"脚本自己为什么没起来"）
   assert.deepEqual(desk.tail, ['· 启动', '✓ starting the desktop shell: app.exe']);
+  // 原始行带着颜色码一起留（输出悬浮卡画彩色控制台靠它）
+  assert.equal(
+    desk.rawTail?.[1],
+    '\u001B[32m✓ starting the desktop shell: app.exe\u001B[0m',
+  );
   // 轮询必须顺手让执行缝记一笔进程树（`inspectActivity()`）：它是 `terminate()`
   // 清理整棵树的唯一线索——这些脚本的中间进程会重新挂父，事后快照就找不回后代了
   // （实测泄漏的 vite preview 就是这么留下、并一直占着端口的）。
@@ -1825,6 +2470,18 @@ await check('脚本自己退出（handle.done 结算）→ run 判为已退出�
   assert.equal(run.status, 'exited');
   assert.equal(run.exitCode, 3);
   assert.equal(run.endedAt !== undefined, true);
+});
+
+await check('tail 只留最近 200 行（输出面板要能看清"最近发生了什么"，又不无限吃内存）', async () => {
+  const { manager, root, runtime } = await makeManager(MANIFEST_3);
+  const started = await manager.startRun({ projectRoot: root, entryId: 'web', sessionId: 'session-1' });
+  assert.equal(started.ok, true);
+  for (let index = 0; index < 230; index += 1) runtime.feed(`第 ${index} 行\r\n`);
+  manager.pollOnce(started.runId);
+  const run = manager.state().runs.find((candidate) => candidate.runId === started.runId);
+  assert.equal(run.tail.length, 200, '应恰好取最后 200 行');
+  assert.equal(run.tail[0], '第 30 行', '前 30 行应被挤出尾巴');
+  assert.equal(run.tail.at(-1), '第 229 行');
 });
 
 console.log(`\n${passed} checks passed${failed > 0 ? `, ${failed} FAILED` : ''}`);

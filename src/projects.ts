@@ -11,7 +11,7 @@
  * 两者都拿不到就报一个明确告警，而不是默默空着。
  */
 import { readFile, stat } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 
 import { coerceEntry, deriveId, expandVariables, resolveInputs } from './config.js';
 import {
@@ -237,7 +237,13 @@ export function resolveEntries(root: string, document: RunConfigDocument): Resol
 
     const context = { workspaceFolder: root, inputs, env };
     const cwdRaw = entry.options?.cwd ?? '${workspaceFolder}';
-    const cwd = expandVariables(cwdRaw, context);
+    const expandedCwd = expandVariables(cwdRaw, context);
+    // 相对 cwd 是**相对 workspaceFolder** 解析的（VS Code 同义）。这一步必须在这里做：
+    // `spawnTerminal` 拿到的是原样字符串，而宿主的进程工作目录不是项目根目录——
+    // 直接把 'apps/web' 递下去，跑起来的是"宿主进程旁边的 apps/web"，不是项目里的。
+    const cwd = normalizeRoot(
+      isAbsolute(expandedCwd) ? expandedCwd : join(root, expandedCwd),
+    );
 
     const envResolved: Record<string, string> = {};
     for (const [key, value] of Object.entries(entry.options?.env ?? {})) {
@@ -262,6 +268,9 @@ export function resolveEntries(root: string, document: RunConfigDocument): Resol
       ...(entry.presentation !== undefined ? { presentation: entry.presentation } : {}),
       group: entry.group ?? 'none',
       ...(entry.onReady !== undefined ? { onReady: entry.onReady } : {}),
+      // 原样保留一条：`+` 面板的「从已有条目复制」必须拿未展开的字段
+      // （否则 `${workspaceFolder}` 会变成这台机器的绝对路径）。
+      raw: entry,
     });
   }
   return resolved;

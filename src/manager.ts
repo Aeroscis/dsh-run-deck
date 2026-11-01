@@ -10,12 +10,15 @@
  * （见那里的边界说明）；就绪钩子的语义在 hooks.ts。
  */
 import { randomBytes } from 'node:crypto';
-import { mkdir, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import { probeSubprocess, renderCommandLine, resolveRunRoute, signalRunTerminal, killRunTerminal, spawnRunTerminal, tapRunTerminal, transition, type TerminalTap } from './exec.js';
 import { initialHookState, observeLine, type HookOutcome, type HookState } from './hooks.js';
-import { loadProject, loadProjects } from './projects.js';
+import { detectTasks as detectProjectTasks } from './detect.js';
+import { insertTaskIntoManifestText, removeTaskFromManifestText } from './manifest-edit.js';
+import { buildTaskEntry } from './newtask.js';
+import { loadProject, loadProjects, MANIFEST_RELATIVE_PATH, normalizeRoot } from './projects.js';
 import { messageOf } from './sessions.js';
 import { effectiveButtons, emptyLayout, layoutFileIn, readLayout, writeLayout } from './store.js';
 import {
@@ -28,6 +31,7 @@ import {
   type FloatingButtonView,
   type FocusedProject,
   type LocalLayout,
+  type NewTaskInput,
   type ResolvedEntry,
   type RundeckCapabilities,
   type RundeckConfig,
@@ -35,6 +39,7 @@ import {
   type RunProject,
   type RunRecord,
   type StartRunRequest,
+  type TaskDetection,
 } from './types.js';
 
 export { initialHookState, observeLine } from './hooks.js';
@@ -67,6 +72,15 @@ function normalizeForCompare(path: string): string {
   const trimmed = path.trim().replaceAll('\\', '/');
   const withoutTrailing = trimmed.length > 1 ? trimmed.replace(/\/+$/u, '') : trimmed;
   return withoutTrailing.toLowerCase();
+}
+
+/** 这个路径是不是一个真实存在的目录（用来拒绝"过期的会话 cwd"）。 */
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /* ── 会话目录 → cwd 的兜底扫描 ──
@@ -105,8 +119,8 @@ const CWD_SCAN_MAX_NODES = 4096;
  */
 const CATALOG_RETRY_MS = 5000;
 
-/** 每条 run 在 `RunRecord.tail` 里留几行输出（面板展示用）。 */
-const TAIL_LINES = 6;
+/** 每条 run 在 `RunRecord.tail` 里留几行输出（输出面板 / ⚙ 面板展示用）。 */
+const TAIL_LINES = 200;
 
 /** 子树里是否有自报 id 等于 `sessionId` 的节点（含自己）。 */
 function subtreeHasId(value: unknown, sessionId: string, depth: number): boolean {
@@ -238,6 +252,9 @@ export class RundeckManager {
 
   private layoutFile: string;
 
+  /** 上次读到/写下 `layout.json` 时的 mtime；用来发现"文件被外部改过"。 */
+  private layoutMtimeMs: number | undefined;
+
   private refreshing: Promise<RunProject[]> | undefined;
 
   constructor(private readonly deps: ManagerDeps) {
@@ -256,7 +273,31 @@ export class RundeckManager {
       this.recordWarning(`插件数据目录不可用：${String(error)}`);
     }
     this.layout = await readLayout(this.layoutFile);
+    try {
+      this.layoutMtimeMs = (await stat(this.layoutFile)).mtimeMs;
+    } catch {
+      this.layoutMtimeMs = undefined;
+    }
     await this.refresh();
+  }
+
+  /**
+   * 布局文件被外部改过就重读。
+   *
+   * `layout.json` 是这台机器上的私有状态，用户完全可能直接编辑它；也出现过
+   * "四个按钮全被收起 → 条整条消失 → 改文件也不生效"这种需要手改救回来的情形。
+   * 之前只在 `initialize()` 读一次，手改必须重启才看见——现在每次 `/state` 前
+   * 比对一次 mtime（一次 stat，很便宜），改完最迟下一轮轮询就生效。
+   */
+  async syncLayoutFromDisk(): Promise<void> {
+    try {
+      const stats = await stat(this.layoutFile);
+      if (this.layoutMtimeMs !== undefined && stats.mtimeMs === this.layoutMtimeMs) return;
+      this.layout = await readLayout(this.layoutFile);
+      this.layoutMtimeMs = stats.mtimeMs;
+    } catch {
+      // 文件不存在 / 读不到：保持内存里那份（等同"没改过"），不要因此把覆盖清空。
+    }
   }
 
   recordWarning(message: string): void {
@@ -288,6 +329,8 @@ export class RundeckManager {
     // 顺序要紧：先清空，再解析根目录（这一步可能记 configPath 的告警），
     // 最后才把清单读出来的告警追加进去。反过来会让 configPath 的告警被清掉。
     this.warnings.length = 0;
+    // `/refresh` 的语义是"重读磁盘"：清单和本地布局一起重读，手改任何一份都不用重启。
+    await this.syncLayoutFromDisk();
     const roots = await this.projectRoots();
     const projects = await loadProjects(roots);
     this.projects = projects;
@@ -792,10 +835,15 @@ export class RundeckManager {
       this.dispatchHook(runId, advanced.outcome);
     }
     if (fresh.length > 0) {
-      // 面板要能说清"脚本自己为什么没起来"，所以留最近几行（剥过 ANSI 的纯文本）。
+      // 面板要能说清"脚本自己为什么没起来"，所以留最近几行（剥过 ANSI 的纯文本）；
+      // rawTail 是同一段的原样版（颜色码原样），输出悬浮卡画彩色控制台用。
       const current = this.runs.get(runId);
       if (current !== undefined) {
-        this.runs.set(runId, { ...current, tail: tap.tail().slice(-TAIL_LINES) });
+        this.runs.set(runId, {
+          ...current,
+          tail: tap.tail().slice(-TAIL_LINES),
+          ...(tap.rawTail().length > 0 ? { rawTail: tap.rawTail().slice(-TAIL_LINES) } : {}),
+        });
       }
     }
     // 进程已经结算：settleRun 会收尾（这里只保证"最后几行"先喂完）。
@@ -937,7 +985,16 @@ export class RundeckManager {
         cwd: trimmed,
         projectRoot: known.root,
         ...(known.configFile !== undefined ? { configFile: known.configFile } : {}),
-        ...(known.entries.length === 0 ? { reason: '这个目录下没有可用条目' } : {}),
+        // 没有清单 / 清单里 0 条时**仍然是焦点**：条要一直在，`+` 才有地方建第一条。
+        // reason 只是给界面一句说明，不再意味着"整条隐藏"。
+        ...(known.entries.length === 0
+          ? {
+              reason:
+                known.configFile === undefined
+                  ? '这个目录还没有 .dsh/run.json'
+                  : '这个目录下没有可用条目',
+            }
+          : {}),
       };
     }
     return { cwd: trimmed, projectRoot: null, reason: '未在已加载的项目里找到这个目录' };
@@ -946,8 +1003,11 @@ export class RundeckManager {
   /**
    * 浮动层要显示的按钮：**只看焦点项目**，按 run.json 的 buttons[] 叠加本地覆盖排序。
    *
-   * 没有声明过 buttons[] 时**自动带上该项目的全部条目**——否则用户必须先编辑
-   * run.json 才能用浮动层，第 5 步就不是"策展"而是"准入"了。
+   * - 没有声明过 buttons[] 时**自动带上该项目的全部条目**——否则用户必须先编辑
+   *   run.json 才能用浮动层，第 5 步就不是"策展"而是"准入"了。
+   * - 声明过 buttons[] 时，`+` 面板的"钉到按钮条"靠**本地覆盖 pinned:true** 把
+   *   没上条的 task 添加上来（命令仍来自 run.json），所以要把全部条目一并提供给
+   *   effectiveButtons。
    */
   listButtons(projectRoot?: string): FloatingButtonView[] {
     const scope =
@@ -977,7 +1037,11 @@ export class RundeckManager {
               ...pickOrder(index),
             }));
 
-      const effective = effectiveButtons(source, this.layout);
+      const effective = effectiveButtons(
+        source,
+        this.layout,
+        project.entries.map((entry) => ({ entry: entry.id })),
+      );
       for (const button of effective) {
         const entry = project.entries.find((candidate) => candidate.id === button.entry);
         if (entry === undefined) {
@@ -1036,12 +1100,15 @@ export class RundeckManager {
         'info',
         `清单变了，已重读：${project.configFile ?? root}（${project.entries.length} 条）`,
       );
-      // 读到 0 条（文件被删/写坏了）也**替换掉旧的**：宁可让条隐藏 + 面板里出现告警，
-      // 也不要留着上一次的按钮让人以为改的东西生效了。
-      return project.entries.length > 0 ? project : undefined;
+      // 读到 0 条（文件被删 / 写坏了）也**替换掉旧的**，并且仍然当作焦点项目：
+      // 面板里会出现告警，条本身照旧在——用户可以点 `+` 重新建条目。
+      return project;
     }
     const { project } = await loadProject(root);
-    if (project.entries.length === 0) return undefined;
+    // 目录都不存在（cwd 是过期的会话路径）就别登记成一个"项目"。
+    if (!(await directoryExists(root))) return undefined;
+    // **没有清单 / 0 条也登记**：这样"一个空目录"也能成为焦点，条上的 `+`
+    // 才有地方落笔（第一条启动项就是从那里建出来的）。
     this.projects = [...this.projects, project];
     return project;
   }
@@ -1057,9 +1124,164 @@ export class RundeckManager {
     }
   }
 
+  /**
+   * 界面新建一条启动项：**真的写进项目的 `.dsh/run.json`**（不是本地覆盖）。
+   *
+   * 这是"手改和界面都能加"的那半边。两条路写的是**同一个文件**，因此：
+   *   - 界面创建的条目和手写进去的完全等价（可见、可 diff、能被别人 clone）；
+   *   - 命令本体依旧只存在于清单里，`layout.json` 还是只存"怎么看它"。
+   *
+   * 字段的校验与收敛在 `newtask.ts`（`buildTaskEntry`）：界面上填的是"一行命令 /
+   * 一个目录 / 几行 KEY=value / 一条正则"，落盘的是 `TaskEntry`。校验失败时**不落盘**。
+   *
+   * 写入用最小文本插入（保留注释与排版），插完立刻重新解析校验；随后重读项目，
+   * 以重新解析的结果为准（id 唯一化、变量展开、告警都由那条既有链路产生）。
+   */
+  async createTask(
+    projectRoot: string,
+    input: NewTaskInput,
+  ): Promise<ApiResult<{ entry: string; projectRoot: string }>> {
+    const root = normalizeRoot(projectRoot);
+    // 项目可能还没登记（比如会话 cwd 现读出来的空目录）：这里自己兜一次。
+    let project = this.projects.find((candidate) => samePath(candidate.root, root));
+    if (project === undefined) {
+      if (!(await directoryExists(root))) {
+        return failure(ERROR_CODES.notFound, '这个目录不存在', root);
+      }
+      project = (await loadProject(root)).project;
+      this.projects = [...this.projects.filter((c) => !samePath(c.root, root)), project];
+    }
+
+    const built = await buildTaskEntry(input, {
+      root: project.root,
+      entries: project.entries,
+      directoryExists,
+    });
+    if (!built.ok) return built;
+    const task = built.task;
+    const id = built.entryId;
+
+    // 还没有清单时**顺手把清单建出来**：这是"不想手写配置文件"的唯一出路，
+    // 否则第一条启动项永远没有落笔的地方。
+    const manifestPath = project.configFile ?? join(root, ...MANIFEST_RELATIVE_PATH);
+    const creatingManifest = project.configFile === undefined;
+    let text: string;
+    if (creatingManifest) {
+      text = '{\n  "version": "2.0.0"\n}\n';
+    } else {
+      try {
+        text = await readFile(manifestPath, 'utf8');
+      } catch (error) {
+        return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
+      }
+    }
+    const inserted = insertTaskIntoManifestText(text, task);
+    if (!inserted.ok) return failure(ERROR_CODES.fs, inserted.message);
+
+    try {
+      // 新清单可能要连 `.dsh/` 一起建出来。
+      await mkdir(dirname(manifestPath), { recursive: true });
+      // 原子写：先写临时文件再 rename，避免半截清单被别的进程读到。
+      const temp = `${manifestPath}.tmp`;
+      await writeFile(temp, inserted.text, 'utf8');
+      await rename(temp, manifestPath);
+    } catch (error) {
+      return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
+    }
+
+    const { project: reloaded } = await loadProject(project.root);
+    this.projects = [
+      ...this.projects.filter((candidate) => !samePath(candidate.root, project.root)),
+      reloaded,
+    ];
+    this.deps.log(
+      'info',
+      `界面新建条目：${project.root} → ${id}（${task.label}）${creatingManifest ? '（新建了 .dsh/run.json）' : ''}`,
+    );
+    return { ok: true, entry: id, projectRoot: project.root };
+  }
+
+  /**
+   * 「+」面板的候选检测：读这个项目的 `package.json` 的 `scripts`。
+   *
+   * 只读、不落盘、不执行任何东西——结果只用来**预填表单**。这也是"检测"与
+   * "创建"分开的原因：VS Code 里探测出来的任务同样要先被选中、再写成一条配置。
+   */
+  async detectTasks(projectRoot: string): Promise<ApiResult<TaskDetection>> {
+    const root = normalizeRoot(projectRoot);
+    let project = this.projects.find((candidate) => samePath(candidate.root, root));
+    if (project === undefined) {
+      if (!(await directoryExists(root))) {
+        return failure(ERROR_CODES.notFound, '这个目录不存在', root);
+      }
+      project = (await loadProject(root)).project;
+      this.projects = [...this.projects.filter((c) => !samePath(c.root, root)), project];
+    }
+    const detection = await detectProjectTasks(project.root, project.entries);
+    return { ok: true, ...detection };
+  }
+
+  /**
+   * 界面删除一条启动项：**真的从项目的 `.dsh/run.json` 的 `tasks[]` 里移除**，
+   * 连带清掉 `buttons[]` 里指向它的声明、以及本机布局里对它的覆盖。
+   *
+   * 这是 `createTask` 的对称操作——两条路编辑的仍是同一个源文件，所以"界面删掉"
+   * 和"手改删掉"完全等价（git diff 看得见）。只想把它从条上收起来的话是另一个
+   * 动作（`setButtonOverride` 的 `pinned: false`），那份 task 仍然保留。
+   */
+  async deleteTask(
+    projectRoot: string,
+    entryId: string,
+  ): Promise<ApiResult<{ entry: string; projectRoot: string }>> {
+    const root = normalizeRoot(projectRoot);
+    const project = this.projects.find((candidate) => samePath(candidate.root, root));
+    if (project === undefined || project.configFile === undefined) {
+      return failure(ERROR_CODES.notFound, '这个项目还没有可编辑的 .dsh/run.json');
+    }
+    const manifestPath = project.configFile;
+
+    let text: string;
+    try {
+      text = await readFile(manifestPath, 'utf8');
+    } catch (error) {
+      return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
+    }
+    const removed = removeTaskFromManifestText(text, entryId);
+    if (!removed.ok) return failure(ERROR_CODES.badRequest, removed.message);
+
+    try {
+      const temp = `${manifestPath}.tmp`;
+      await writeFile(temp, removed.text, 'utf8');
+      await rename(temp, manifestPath);
+    } catch (error) {
+      return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
+    }
+
+    // 本机布局里对它的覆盖也清掉，免得留一个指向已删条目的孤儿键。
+    if (this.layout.buttons[entryId] !== undefined) {
+      const buttons = { ...this.layout.buttons };
+      delete buttons[entryId];
+      const next: LocalLayout = { buttons, ...pickDensity(this.layout.density) };
+      try {
+        await writeLayout(this.layoutFile, next);
+        this.layout = next;
+        this.layoutMtimeMs = undefined;
+      } catch (error) {
+        this.recordWarning(`条目已删除，但清不掉本地布局里的覆盖：${String(error)}`);
+      }
+    }
+
+    const { project: reloaded } = await loadProject(project.root);
+    this.projects = [
+      ...this.projects.filter((candidate) => !samePath(candidate.root, project.root)),
+      reloaded,
+    ];
+    this.deps.log('info', `界面删除条目：${project.root} ← ${entryId}`);
+    return { ok: true, entry: entryId, projectRoot: project.root };
+  }
+
   /** 写单个按钮的本地覆盖（顺序 / 显隐 / 图标 / 分组 / 标题）。 */
-  async setButtonOverride(
-    entry: string,
+  async setButtonOverride(    entry: string,
     override: ButtonOverride,
   ): Promise<ApiResult<{ entry: string }>> {
     const previous = this.layout.buttons[entry];
@@ -1069,6 +1291,8 @@ export class RundeckManager {
     try {
       await writeLayout(this.layoutFile, next);
       this.layout = next;
+      // 自己刚写过：下次比对时强制重读一次（顺带校验落盘内容）。
+      this.layoutMtimeMs = undefined;
       return { ok: true, entry };
     } catch (error) {
       return failure(ERROR_CODES.fs, '写不了本地覆盖文件', String(error));
@@ -1086,6 +1310,8 @@ export class RundeckManager {
     try {
       await writeLayout(this.layoutFile, next);
       this.layout = next;
+      // 自己刚写过：下次比对时强制重读一次（顺带校验落盘内容）。
+      this.layoutMtimeMs = undefined;
       return { ok: true, order };
     } catch (error) {
       return failure(ERROR_CODES.fs, '写不了本地覆盖文件', String(error));
@@ -1102,6 +1328,8 @@ export class RundeckManager {
     try {
       await writeLayout(this.layoutFile, next);
       this.layout = next;
+      // 自己刚写过：下次比对时强制重读一次（顺带校验落盘内容）。
+      this.layoutMtimeMs = undefined;
       return { ok: true, density };
     } catch (error) {
       return failure(ERROR_CODES.fs, '写不了本地覆盖文件', String(error));
@@ -1170,23 +1398,31 @@ export class RundeckManager {
       return failure(ERROR_CODES.badRequest, 'cwd 不能为空');
     }
     const project = await this.loadFocusedProject(trimmed);
-    if (project === undefined || project.entries.length === 0) {
+    if (project === undefined) {
       return {
         ok: true,
         focused: {
           cwd: trimmed,
           projectRoot: null,
-          reason: '这个目录下没有可用的 .dsh/run.json',
+          reason: '这个目录不存在',
         },
       };
     }
-    // projectRoot 一律用归一化后的形式（`/` 分隔），客户端与 host 比较才稳。
+    // 0 条目也**返回 projectRoot**：条要一直在，`+` 才有地方建第一条。
     return {
       ok: true,
       focused: {
         cwd: trimmed,
         projectRoot: project.root,
         ...(project.configFile !== undefined ? { configFile: project.configFile } : {}),
+        ...(project.entries.length === 0
+          ? {
+              reason:
+                project.configFile === undefined
+                  ? '这个目录还没有 .dsh/run.json'
+                  : '这个目录下没有可用条目',
+            }
+          : {}),
       },
     };
   }

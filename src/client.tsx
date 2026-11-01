@@ -26,9 +26,14 @@ import React from 'react';
 import type {
   ApiResult,
   ButtonDensity,
+  DetectedTask,
   FloatingButtonView,
+  NewTaskInput,
   ResolvedEntry,
   RundeckState,
+  RunRecord,
+  TaskDetection,
+  TaskGroup,
 } from './types.js';
 
 const NS = 'dsh-rundeck';
@@ -66,6 +71,13 @@ const ZH: Record<string, string> = {
   exited: '已退出',
   starting: '启动中',
   stopping: '停止中',
+  output: '输出',
+  outputEmpty: '这条还没说过一句话',
+  outputHint: '最近 200 行 · 每 2.5 秒随轮询长出新的一批',
+  pin: '钉住（拿开鼠标也不消失）',
+  unpin: '拔钉（恢复悬停才出现）',
+  pinStateOn: '已钉住',
+  pinStateOff: '钉住',
   runFailed: '启动失败',
   stopFailed: '停止失败',
   saveFailed: '保存失败',
@@ -76,8 +88,68 @@ const ZH: Record<string, string> = {
   overflow: '更多按钮',
   add: '添加按钮',
   settings: '设置',
-  addTitle: '启动项管理',
-  addHint: '当前工作区的全部条目。按住左侧 ⋮⋮ 上下拖动调整顺序，顺序即按钮条上的排列顺序。',
+  createTitle: '新建启动项',
+  createHint: '填名称和一行命令就够了；工作目录、环境变量、就绪正则这些收在「更多设置」里。创建后会写进这个项目的 .dsh/run.json，并自动钉到按钮条。',
+  detectTitle: '从项目里检测',
+  detectHint: '点一条就填进下面的表单（填进去之后仍然可以改）。',
+  detectLoading: '正在读 package.json…',
+  detectEmpty: '没有可检测的 scripts（没有 package.json，或者里面没有 scripts）；用下面的通用模板，或者直接自己填。',
+  detectExists: '已在清单',
+  detectTemplates: '通用模板',
+  detectScripts: 'package.json 的 scripts',
+  commandSplitHint: '第一个词是命令，其余是参数（含空格的参数用引号）。',
+  copyTitle: '从已有条目复制',
+  copyPlaceholder: '选择一条…（复制命令、目录、环境变量、就绪正则；id 不复制）',
+  moreShow: '展开更多设置',
+  moreHide: '收起更多设置',
+  fieldName: '名称',
+  fieldCommand: '命令行',
+  fieldCwd: '工作目录',
+  fieldCwdPlaceholder: '留空 = 项目根目录（${workspaceFolder}）',
+  fieldEnv: '环境变量',
+  fieldEnvPlaceholder: 'KEY=value，每行一条',
+  fieldEnvInvalid: '环境变量要写成 KEY=value，这一行看不懂：',
+  fieldBackground: '长驻（跑完不退出）',
+  fieldGroup: '分组',
+  groupNone: '无',
+  groupBuild: '构建',
+  groupTest: '测试',
+  fieldId: 'id',
+  fieldIdPlaceholder: '可选；留空由名称派生',
+  fieldReady: '就绪正则',
+  fieldReadyPlaceholder: '例如：(https?://\\S+)',
+  fieldReadyHint: '命中即算「就绪」；填的是正则源码本身，不带两边的斜杠。',
+  fieldOpenUrl: '就绪后打开地址',
+  fieldUrlPattern: 'URL 正则',
+  fieldUrlPatternPlaceholder: '留空 = 用上面的就绪正则',
+  fieldUriFormat: '地址格式',
+  fieldUriFormatPlaceholder: '可选；%s = 抓到的地址',
+  fieldReveal: '跑起来时自动钉住输出卡',
+  fieldOnReady: '就绪后接着跑',
+  fieldOnReadyNone: '不接续',
+  fieldIcon: '按钮图标',
+  fieldIconPlaceholder: '可选：eye / play / hammer …',
+  fieldButtonGroup: '按钮分组',
+  fieldButtonGroupPlaceholder: '可选；同组按钮在条上相邻',
+  fieldAppearanceHint: '图标与分组只写进本机的 layout.json，不进仓库、不影响别人。',
+  createdNote: '已写进 .dsh/run.json 并钉到按钮条。',
+  manageTitle: '管理启动项',
+  manageHint: '按住某一行的 ⋮⋮ 上下拖动调顺序（也可以 Alt+↑/↓）；「从按钮条收起」只把按钮从条上移除，条目还在；「删除」会真的把这条任务从 .dsh/run.json 里移除。',
+  deleteEntry: '删除',
+  deleteConfirm: '确认删除',
+  deleteCancel: '取消',
+  deleteHint: '从 .dsh/run.json 里移除这条任务（和"从按钮条收起"不同）',
+  addAllOnBar: '全部条目都已经在按钮条上了（run.json 的 buttons[] 已把它们声明为按钮，或清单没写 buttons[] 时默认全部上条），所以这里没有可添加的条目。想试「钉到按钮条」，先对某一行点一下「从按钮条收起」。',
+  newTaskTitle: '新建启动项',
+  newTaskHint: '写进这个项目的 .dsh/run.json（和手改同一个文件），创建后自动钉到按钮条。',
+  newTaskLabelPlaceholder: '名称，例如：启动开发服务器',
+  newTaskCommandPlaceholder: '命令，例如：npm run dev',
+  newTaskCreate: '创建并钉到按钮条',
+  allHiddenNote: '全部按钮已收起 · 点 + 把要用的钉回来',
+  noEntriesNote: '这个目录还没有启动项 · 点 + 新建第一条',
+  noProjectNote: '还没有焦点项目 · 打开一个工作区后这里就能新建启动项',
+  noManifestNote: '还没有任何启动项；用下面的表单建第一条（如果还没有 .dsh/run.json，会自动创建）。',
+  restoreAll: '全部钉回来',
   addPinned: '已在条上',
   addUnpinned: '未添加',
   addPin: '钉到按钮条',
@@ -115,6 +187,13 @@ const EN: Record<string, string> = {
   exited: 'exited',
   starting: 'starting',
   stopping: 'stopping',
+  output: 'Output',
+  outputEmpty: 'Nothing printed yet',
+  outputHint: 'Last 200 lines · refreshed with each 2.5s poll',
+  pin: 'Pin (stays even after you move away)',
+  unpin: 'Unpin (back to hover-only)',
+  pinStateOn: 'Pinned',
+  pinStateOff: 'Pin',
   runFailed: 'Start failed',
   stopFailed: 'Stop failed',
   saveFailed: 'Save failed',
@@ -125,8 +204,68 @@ const EN: Record<string, string> = {
   overflow: 'More buttons',
   add: 'Add button',
   settings: 'Settings',
-  addTitle: 'Run entries',
-  addHint: 'Every entry in this workspace. Drag the ⋮⋮ handle to reorder; the order is the bar order.',
+  createTitle: 'New launch entry',
+  createHint: 'A name and a one-line command are enough; working directory, env vars and ready patterns live under "More settings". It is written into this project’s .dsh/run.json and pinned to the bar.',
+  detectTitle: 'Detected in this project',
+  detectHint: 'Click one to fill the form below (you can still change every field).',
+  detectLoading: 'Reading package.json…',
+  detectEmpty: 'No scripts to detect (no package.json, or it has no scripts); use a template below or fill the form yourself.',
+  detectExists: 'already in manifest',
+  detectTemplates: 'Templates',
+  detectScripts: 'package.json scripts',
+  commandSplitHint: 'First word is the command, the rest are arguments (quote arguments containing spaces).',
+  copyTitle: 'Copy an existing entry',
+  copyPlaceholder: 'Pick one… (copies command, cwd, env and ready patterns; not the id)',
+  moreShow: 'More settings',
+  moreHide: 'Hide extra settings',
+  fieldName: 'Name',
+  fieldCommand: 'Command',
+  fieldCwd: 'Working dir',
+  fieldCwdPlaceholder: 'Empty = project root (${workspaceFolder})',
+  fieldEnv: 'Env vars',
+  fieldEnvPlaceholder: 'KEY=value, one per line',
+  fieldEnvInvalid: 'Env vars must be KEY=value; cannot parse line:',
+  fieldBackground: 'Long-running (do not exit)',
+  fieldGroup: 'Group',
+  groupNone: 'none',
+  groupBuild: 'build',
+  groupTest: 'test',
+  fieldId: 'id',
+  fieldIdPlaceholder: 'Optional; derived from the name',
+  fieldReady: 'Ready pattern',
+  fieldReadyPlaceholder: 'e.g. (https?://\\S+)',
+  fieldReadyHint: 'A match marks the run ready; this is the regex source itself, without slashes.',
+  fieldOpenUrl: 'Open the URL once ready',
+  fieldUrlPattern: 'URL pattern',
+  fieldUrlPatternPlaceholder: 'Empty = reuse the ready pattern',
+  fieldUriFormat: 'URI format',
+  fieldUriFormatPlaceholder: 'Optional; %s = the captured address',
+  fieldReveal: 'Pin the output card when it starts',
+  fieldOnReady: 'Chain to',
+  fieldOnReadyNone: 'nothing',
+  fieldIcon: 'Button icon',
+  fieldIconPlaceholder: 'Optional: eye / play / hammer …',
+  fieldButtonGroup: 'Button group',
+  fieldButtonGroupPlaceholder: 'Optional; same group stays adjacent',
+  fieldAppearanceHint: 'Icon and group only go into this machine’s layout.json — not the repo, not other people.',
+  createdNote: 'Written into .dsh/run.json and pinned to the bar.',
+  manageTitle: 'Manage launch entries',
+  manageHint: 'Drag a row by its ⋮⋮ handle (or Alt+↑/↓) to reorder; "Hide from bar" only removes the button, while "Delete" removes the task from .dsh/run.json.',
+  deleteEntry: 'Delete',
+  deleteConfirm: 'Confirm delete',
+  deleteCancel: 'Cancel',
+  deleteHint: 'Removes the task from .dsh/run.json (unlike "hide from bar")',
+  addAllOnBar: 'Every entry is already on the bar (they are declared in run.json buttons[], or the manifest has no buttons[] so all entries default on), so there is nothing to add here. To try "Pin to bar", click "Hide from bar" on a row first.',
+  newTaskTitle: 'New launch entry',
+  newTaskHint: 'Writes into this project’s .dsh/run.json (the same file you edit by hand) and pins it to the bar.',
+  newTaskLabelPlaceholder: 'Name, e.g. Start dev server',
+  newTaskCommandPlaceholder: 'Command, e.g. npm run dev',
+  newTaskCreate: 'Create and pin',
+  allHiddenNote: 'All buttons hidden · open + to pin some back',
+  noEntriesNote: 'No launch entries here yet · open + to create the first one',
+  noProjectNote: 'No focused project yet · open a workspace to create launch entries here',
+  noManifestNote: 'No launch entries yet; create the first one below (a .dsh/run.json will be created if missing).',
+  restoreAll: 'Pin all back',
   addPinned: 'on bar',
   addUnpinned: 'not added',
   addPin: 'Pin to bar',
@@ -155,6 +294,64 @@ const EN: Record<string, string> = {
   noFocus: 'No .dsh/run.json in this directory',
   noFocusHint: 'Add one to the project root to get this workspace’s run buttons.',
 };
+
+/* ─────────────────────── 弹层高度 ─────────────────────── */
+
+/**
+ * 弹层与条之间的缝（px）。
+ *
+ * 这个数只有一处定义：`popupSpaceFor()` 的减法与 CSS 里两处
+ * `bottom:calc(100% + ${POPUP_OFFSET}px)` 的锚点都引用它（CSS 用模板字符串插值，
+ * 不写字面量），避免各改各的——差几像素，算出来的上限就会差几像素。
+ */
+const POPUP_OFFSET = 8;
+
+/** 弹层顶边离裁切区上沿留的余量：不留会贴着边，圆角和阴影看起来像被切了。 */
+const POPUP_TOP_MARGIN = 12;
+
+/** 把「条上方可放弹层的高度」从 JS 传给 CSS 的自定义属性名。 */
+const POPUP_SPACE_VAR = '--ru-pop-space';
+
+/**
+ * 条上方还能放下多高的弹层（px，向下取整）。
+ *
+ * **为什么需要这个数**：弹层锚在条的上沿、只向上长。新会话时宿主把整列
+ * （标题、输入框）在会话区里垂直居中，条大概在屏幕中间——`max-height:80vh`
+ * 的面板会伸到视口和滚动容器的上沿之外，顶部那一截既看不见也滚不到
+ * （滚动容器的 `overflow` 只裁切，不会给"向上的溢出"留可滚动区域）。
+ *
+ * 算的是**实际可用的上边界**：取条顶边与最近裁切祖先顶边里更靠下的那个，
+ * 再扣掉弹层与条之间的缝和顶部留白。结果可能为 0（条已经贴到上沿），
+ * **不能返回负数**——负的 `max-height` 是无效值，会被当成"没设上限"。
+ *
+ * @param hostTop 条（`__ru_host`）顶边在视口坐标系里的 y。
+ * @param clipTop 最近裁切祖先顶边在视口坐标系里的 y；没有则 0（视口上沿）。
+ * @returns 弹层可用的最大高度。
+ */
+function popupSpaceFor(hostTop: number, clipTop = 0): number {
+  return Math.max(0, Math.floor(hostTop - Math.max(0, clipTop) - POPUP_OFFSET - POPUP_TOP_MARGIN));
+}
+
+/**
+ * 找条最近的一个**会裁切溢出**的祖先，返回它顶边的视口坐标。
+ *
+ * 宿主的会话内容住在 `[data-conversation-scroll]`（`overflow-y:auto`）里，弹层虽然
+ * 绝对定位，仍然会被这个容器裁切。逐级往上找第一个 `overflow-y` 不是 `visible`
+ * 的祖先就是实际边界；找不到就退回 0（视口上沿）。
+ *
+ * 只按视口上沿算会多算出一个 header 的高度，正好是顶部被切掉的那一截。
+ */
+function popupClipTop(host: HTMLElement): number {
+  let node: HTMLElement | null = host.parentElement;
+  while (node !== null) {
+    const overflowY = getComputedStyle(node).overflowY;
+    if (overflowY !== '' && overflowY !== 'visible') {
+      return Math.max(0, node.getBoundingClientRect().top);
+    }
+    node = node.parentElement;
+  }
+  return 0;
+}
 
 /* ─────────────────────────── 样式 ─────────────────────────── */
 
@@ -253,17 +450,89 @@ const CSS = [
   '.__ru_btn[data-status="stopping"] .__ru_dot{background:var(--dsw-alias-state-error-primary)}',
   '@keyframes __ru_pulse{0%,100%{opacity:1}50%{opacity:.35}}',
   '.__ru_grow{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden}',
+  // 全部按钮被收起时的"说明 + 出口"：条还在，只是中间空着。
+  '.__ru_emptyNote{flex:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}',
   '.__ru_tail{flex:none;display:flex;align-items:center;gap:6px}',
   // 弹出面板 / 溢出菜单：锚在条的上方。
   // ⚠️ 这里的 z-index 只是**我们这条 host 上下文内部**的顺序，跨上下文（比如压过宿主的
   // 「回到底部」圆钮）靠的是 `STACK_LIFT_RULE` —— 把弹层自己的 z-index 调大是没用的。
-  '.__ru_pop{position:absolute;z-index:10;bottom:calc(100% + 8px);left:0;right:0;box-sizing:border-box;max-height:min(70vh,460px);overflow:auto;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 40px rgba(0,0,0,.28);color:var(--dsw-alias-label-primary);font-size:13px}',
+  // 高度上限除了视口比例，还有一道 `--ru-pop-space`：FloatingBar 在每次绘制前量出
+  // 「条上方到最近裁切祖先/视口上沿」的实际距离写进来。只按视口算（70vh/80vh）时，
+  // 新会话输入框居中、条在屏幕中间，面板顶部会被裁在视口外（见 popupSpaceFor）。
+  `.__ru_pop{position:absolute;z-index:10;bottom:calc(100% + ${POPUP_OFFSET}px);left:0;right:0;box-sizing:border-box;max-height:min(70vh,460px,var(${POPUP_SPACE_VAR},100vh));overflow:auto;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 40px rgba(0,0,0,.28);color:var(--dsw-alias-label-primary);font-size:13px}`,
   '.__ru_popTitle{margin:0 0 4px;font-size:14px;font-weight:600}',
-  '.__ru_popHint{margin:0 0 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+  // 「+」面板比别的弹层高：它有表单，展开「更多设置」后行数不少。
+  // 上限除了 80vh/620px，同样要夹一道 `--ru-pop-space`——面板越高，越容易撞上"条在屏幕中间"。
+  `.__ru_pop.__ru_popTall{max-height:min(80vh,620px,var(${POPUP_SPACE_VAR},100vh))}`,
+  '.__ru_popHint{margin:0 0 10px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);white-space:pre-wrap;word-break:break-word}',
+  // 「没有可添加的条目」这类"说清楚为什么"的提示：比普通 hint 更显眼一点。
+  '.__ru_popNote{margin:0 0 10px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+  '.__ru_popNoteRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+  // 新建启动项：一小块表单（写进项目 run.json，和手改同一个文件）。
+  '.__ru_newTask{margin:0 0 12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}',
+  '.__ru_newTaskTitle{margin:0 0 4px;font-size:13px;font-weight:600}',
+  '.__ru_newTaskRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+  // 「+」面板的表单：一行一个字段（标签靠左固定宽、控件吃满剩余宽度）。
+  // 基础只有两行，其余收在「更多设置」里——VS Code 的 tasks.json 也是这个分工：
+  // 必填的就两个字段，其余靠 schema 补全，而不是一上来甩十几个输入框。
+  '.__ru_form{display:flex;flex-direction:column;gap:8px;margin:10px 0}',
+  '.__ru_field{display:flex;align-items:flex-start;gap:8px;min-width:0}',
+  '.__ru_fieldLabel{flex:none;width:92px;padding-top:4px;text-align:right;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+  '.__ru_fieldBody{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+  '.__ru_fieldHint{margin:0;font-size:11px;line-height:15px;color:var(--dsw-alias-label-tertiary)}',
+  '.__ru_textarea{box-sizing:border-box;width:100%;min-height:54px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;font-size:12px;line-height:18px;resize:vertical}',
+  '.__ru_textarea:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#d8863b)}',
+  '.__ru_select{box-sizing:border-box;height:26px;max-width:100%;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;font-size:12px}',
+  '.__ru_select:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#d8863b)}',
+  '.__ru_check{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);cursor:pointer;white-space:nowrap}',
+  '.__ru_check input{accent-color:var(--dsw-alias-brand-primary,#d8863b)}',
+  '.__ru_advanced{display:flex;flex-direction:column;gap:10px;margin:4px 0 10px;padding:10px 12px;border:1px dashed var(--dsw-alias-border-l2);border-radius:10px}',
+  '.__ru_moreToggle{align-self:flex-start;height:24px;padding:0 9px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}',
+  '.__ru_moreToggle:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  // 检测候选：一条一颗胶囊，点一下就填表。「已在清单」的那颗变灰（防重复添加）。
+  '.__ru_panel{margin:0 0 10px;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}',
+  '.__ru_panelHead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:2px}',
+  '.__ru_panelTitle{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}',
+  '.__ru_panelHint{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}',
+  '.__ru_chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}',
+  '.__ru_chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;height:26px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:100px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}',
+  '.__ru_chip:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l3)}',
+  '.__ru_chip:disabled{opacity:.55;cursor:default}',
+  '.__ru_chipTag{flex:none;font-size:10px;line-height:14px;padding:0 4px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-tertiary)}',
+  '.__ru_input{box-sizing:border-box;height:26px;min-width:0;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;font-size:12px;line-height:1}',
+  '.__ru_input:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#d8863b)}',
+  '.__ru_inputGrow{flex:1 1 240px}',
   // 失败原因：保留原话的换行与长路径（不折损、可选中复制）
   '.__ru_errorText{margin:0 0 8px;padding:8px 10px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;user-select:text}',
   // run 的最近几行输出（面板里"脚本自己为什么没起来"的唯一证据）
-  '.__ru_runTail{margin:0;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-family-mono,monospace);font-size:11px;line-height:16px;white-space:pre-wrap;word-break:break-word;user-select:text}',
+  '.__ru_runTail{margin:0;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-family-mono,monospace);font-size:11px;line-height:16px;white-space:pre-wrap;word-break:break-word;user-select:text;max-height:240px;overflow:auto}',
+  // 输出面板：把执行缝本来就攒着的最近几百行接出来摊开看。
+  // 输出**一直在被收着**（尾行 800ms 一拍），之前只是没有一个口子亮出来。
+  '.__ru_outView{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-family-mono,monospace);font-size:11px;line-height:16px;white-space:pre-wrap;word-break:break-word;user-select:text;max-height:min(50vh,320px);overflow:auto}',
+  '.__ru_outStatus{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400}',
+  // ⌃ 输出悬浮卡：悬停出现、拿开消失、📌 钉住常驻。类名挂 `__ru_pop` 是借它两件事：
+  // "绝对定位在条上方"与宿主 seat 的抬升规则（:has(. __ru_pop)）；下面的条目覆盖 pop 的
+  // 通栏左宽——卡只 560px 宽（输出短时更矮更窄），不盖满。
+  `.__ru_hover{display:flex;flex-direction:column;gap:6px;right:auto;width:min(560px,calc(100% - 16px));max-height:min(46vh,250px,var(${POPUP_SPACE_VAR},100vh));padding:10px 12px;border-radius:12px}`,
+  '.__ru_hoverHead{display:flex;align-items:center;gap:6px;min-width:0}',
+  // 脚本名不再吃 flex:1：状态徽章贴着名字排，剩下的空隙由弹簧吃掉，图钉落到最右。
+  '.__ru_hoverLabel{min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}',
+  // 状态徽章：圈一圈的胶囊，颜色按状态走（就绪=绿、跑动=琥珀、停止中=红、已退出=灰）。
+  // 颜色跟按钮上的状态点同一套语义变量，两处说的是同一件事。
+  '.__ru_statusBadge{flex:none;display:inline-flex;align-items:center;padding:1px 8px;border-radius:100px;border:1px solid var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary);font-size:11px;line-height:16px;white-space:nowrap}',
+  '.__ru_statusBadge[data-status="running"],.__ru_statusBadge[data-status="starting"]{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}',
+  '.__ru_statusBadge[data-status="stopping"]{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}',
+  '.__ru_statusBadge[data-status="exited"]{color:var(--dsw-alias-label-tertiary);border-color:var(--dsw-alias-border-l2)}',
+  '.__ru_hoverSpring{flex:1 1 auto}',
+  '.__ru_hover .__ru_outView{flex:1 1 auto;min-height:0;max-height:none}',
+  // 📌 钉住态必须"看得见"：钉住的卡在原边框外再描一圈品牌色（悬停卡没有这圈）。
+  // "这张卡被钉住了"靠描边说话，不靠对着按钮上的图形猜。
+  '.__ru_hover.__ru_hoverPinned{border-color:var(--dsw-alias-brand-primary,#d8863b);box-shadow:0 0 0 1px var(--dsw-alias-brand-primary,#d8863b),0 12px 40px rgba(0,0,0,.28)}',
+  // 钉住时图钉按钮跟着品牌色走（emoji 字形本身不吃 color，按钮里的状态文字会跟着变）。
+  '.__ru_hoverPinned .__ru_pinBtn{color:var(--dsw-alias-brand-primary,#d8863b)}',
+  '.__ru_pinBtn{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:22px;padding:0 7px;border:none;border-radius:100px;background:transparent;color:inherit;font:inherit;font-size:12px;line-height:1;cursor:pointer}',
+  '.__ru_pinText{white-space:nowrap}',
+  '.__ru_pinBtn:hover{background:var(--dsw-alias-button-floating-hover)}',
   '.__ru_row{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;margin-bottom:6px;background:var(--dsw-alias-bg-layer-1)}',
   '.__ru_row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
   // ── 拖动排序（指针事件，**不是** HTML5 draggable）──
@@ -290,8 +559,8 @@ const CSS = [
   '.__ru_option{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer}',
   '.__ru_option:hover{background:var(--dsw-alias-interactive-bg-hover)}',
   '.__ru_optionOn{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-interactive-bg-active)}',
-  '.__ru_error{margin:0 0 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary)}',
-  '.__ru_menu{position:absolute;z-index:11;bottom:calc(100% + 8px);left:0;min-width:180px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 40px rgba(0,0,0,.28)}',
+  '.__ru_error{margin:0 0 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;word-break:break-word}',
+  `.__ru_menu{position:absolute;z-index:11;bottom:calc(100% + ${POPUP_OFFSET}px);left:0;min-width:180px;max-height:min(70vh,460px,var(${POPUP_SPACE_VAR},100vh));overflow:auto;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 40px rgba(0,0,0,.28)}`,
   // 弹层打开期间把宿主的 composerSeat 抬到「回到底部」圆钮之上（根因见 STACK_LIFT_RULE）。
   STACK_LIFT_RULE,
   '.__ru_menuItem{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:none;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;text-align:left;cursor:pointer}',
@@ -978,6 +1247,35 @@ async function stopRun(runId: string): Promise<ApiResult<unknown>> {
   return call<unknown>('/stop', 'POST', { runId });
 }
 
+/**
+ * 新建一条启动项。**host 会把它真的写进项目的 .dsh/run.json**（保留注释的最小
+ * 文本插入），所以界面加的和手写进去的是同一条东西——不是存在本地布局里的影子。
+ *
+ * 传的是**人填的那一组字段**（名称、一行命令、可选的 cwd/env/就绪正则…）；
+ * 拆命令、拼 `TaskEntry`、逐项校验都在 host（`src/newtask.ts`），界面不重复实现一份。
+ */
+async function createTask(
+  projectRoot: string,
+  input: NewTaskInput,
+): Promise<ApiResult<{ entry: string }>> {
+  return call<{ entry: string }>('/task', 'POST', { projectRoot, ...input });
+}
+
+/**
+ * 检测这个项目里可以加什么（读 `package.json` 的 `scripts`）。
+ *
+ * 只读、不落盘：结果是**候选**，点一条才会填进表单。对应 VS Code 里
+ * `Tasks: Run Task` 列出的那些 `npm: dev`——探测与创建是两件事。
+ */
+async function detectTasks(projectRoot: string): Promise<ApiResult<TaskDetection>> {
+  return call<TaskDetection>('/detect', 'POST', { projectRoot });
+}
+
+/** 删除一条启动项（**真的从项目 run.json 的 tasks[] 里移除**，不是"从条上收起"）。 */
+async function deleteTask(projectRoot: string, entryId: string): Promise<ApiResult<unknown>> {
+  return call<unknown>('/task/remove', 'POST', { projectRoot, entryId });
+}
+
 /* ================================================================== *
  * 按钮条
  * ================================================================== */
@@ -995,11 +1293,18 @@ interface BarProps {
   busy: string | null;
   actions: BarActions;
   onCycleDensity(): void;
+  /** 打开「+」面板：只负责新建任务（写进项目 run.json）。 */
   onOpenAdd(): void;
+  /** 打开「☰」面板：管理成员（钉上/移除）与顺序（拖动排序）。 */
+  onOpenManage(): void;
   onOpenSettings(): void;
   onOpenError(): void;
+  /** 输出悬浮卡当前"钉"在哪条 entry（卡片头部的图钉按钮控制；null = 没钉，悬停才出现）。 */
+  pinnedEntry: string | null;
+  /** 钉住/拔钉某条条目的输出卡（悬浮卡头部的图钉按钮，条上没有第二颗钉钮）。 */
+  onTogglePin(entry: string): void;
   onOpenOverflow(): void;
-  openPanel: 'none' | 'add' | 'settings' | 'error' | 'overflow';
+  openPanel: 'none' | 'add' | 'manage' | 'settings' | 'error' | 'overflow';
   onClosePanel(): void;
   entries: ResolvedEntry[];
   projectRoot: string | null;
@@ -1010,6 +1315,16 @@ interface BarProps {
   configSource: string;
   onReorder(order: string[]): Promise<void>;
   onPin(entry: string, pinned: boolean): Promise<void>;
+  /**
+   * 新建启动项（写进项目 run.json 的 tasks[]），成功后由调用方钉到按钮条。
+   * `button` 是外观（图标/分组），只进本机 layout.json——run.json 里不存展示。
+   */
+  onCreateTask(
+    input: NewTaskInput,
+    button: { icon?: string; group?: string },
+  ): Promise<ApiResult<{ entry: string }>>;
+  /** 删除启动项（真的从项目 run.json 的 tasks[] 里移除）。 */
+  onDeleteTask(entryId: string): Promise<ApiResult<unknown>>;
   /** 最近一次跑/停的失败原因；非 null 时条上出现一个可点的告警标记。 */
   lastError: string | null;
 }
@@ -1021,10 +1336,109 @@ interface BarProps {
 function FloatingBar(props: BarProps): React.ReactElement | null {
   const {
     buttons, runs, density, runtime, busy, actions, onCycleDensity,
-    onOpenAdd, onOpenSettings, onOpenError, onOpenOverflow, openPanel, onClosePanel,
+    onOpenAdd, onOpenManage, onOpenSettings, onOpenError, onOpenOverflow, openPanel, onClosePanel,
+    pinnedEntry, onTogglePin,
   } = props;
 
-  if (buttons.length === 0) return null;
+  /* ── 输出悬浮卡：悬停显示 / 拿开就消失 / 📌 钉住常驻 ── */
+  const [hoverEntry, setHoverEntry] = React.useState<string | null>(null);
+  /** 预览卡左缘缓存（px，相对 `__ru_host`）；鼠标进按钮那一刻量一次。 */
+  const hoverLeft = React.useRef<Record<string, number>>({});
+  const hideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hostRef = React.useRef<HTMLDivElement | null>(null);
+
+  const keepHover = (entry: string): void => {
+    if (hideTimer.current !== null) {
+      clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+    setHoverEntry(entry);
+  };
+  /** "拿开就消失" ≠ 立即消失：留 160ms，让鼠标从按钮挪进卡片那段间隙不闪断。 */
+  const scheduleHide = (): void => {
+    if (hideTimer.current !== null) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => {
+      hideTimer.current = null;
+      setHoverEntry(null);
+    }, 160);
+  };
+  /**
+   * 记下这颗按钮的左缘（`__ru_bar` 自己没有定位上下文 → offsetParent 就是
+   * `__ru_host`），顺手把卡往里推到卡宽以内（别探出条外被裁掉半边）。
+   */
+  const noteChip = (entry: string, node: HTMLElement | null): void => {
+    if (node === null) return;
+    const width = hostRef.current?.clientWidth ?? 0;
+    const card = Math.min(560, Math.max(0, width - 16));
+    hoverLeft.current[entry] = Math.max(8, Math.min(node.offsetLeft, width - card - 8));
+  };
+
+  /**
+   * 量一次「条上方还有多少高度」，写进 CSS 变量供所有向上弹的层使用。
+   *
+   * 每次渲染后都量（下面那个 `useLayoutEffect` 不带依赖）：宿主会在会话从空白变成
+   * 有对话时把输入框从屏幕中间挪到底部，这种移动不伴随我们自己的状态变化，只靠
+   * resize 事件抓不到；而父组件每 2.5 秒轮询一次，等于顺手校准。
+   */
+  const syncPopupSpace = React.useCallback((): void => {
+    const host = hostRef.current;
+    if (host === null) return;
+    const space = popupSpaceFor(host.getBoundingClientRect().top, popupClipTop(host));
+    host.style.setProperty(POPUP_SPACE_VAR, `${space}px`);
+  }, []);
+
+  React.useLayoutEffect(() => {
+    syncPopupSpace();
+  });
+
+  React.useLayoutEffect(() => {
+    let frame = 0;
+    const schedule = (): void => {
+      if (frame !== 0) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        syncPopupSpace();
+      });
+    };
+    const onScroll = (event: Event): void => {
+      // 面板/悬浮卡自己的滚动不改变条的位置；滚动时每帧量一次布局没有意义。
+      if (event.target instanceof Element && event.target.closest('.__ru_host') !== null) return;
+      schedule();
+    };
+    window.addEventListener('resize', schedule);
+    window.visualViewport?.addEventListener('resize', schedule);
+    // 条住在宿主的滚动容器里（新会话居中时尤其明显）：容器一滚，条的位置就变了。
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', schedule);
+      window.visualViewport?.removeEventListener('resize', schedule);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [syncPopupSpace]);
+
+  /** 钉住的卡（`reveal:always` 自动钉的那张）没经过"悬停量位"，布局时找按钮量一次。 */
+  React.useLayoutEffect(() => {
+    if (pinnedEntry === null) return;
+    // 属性选择器的值是带引号的字面量：用 JSON.stringify 转义（不依赖 CSS.escape）。
+    const chip =
+      hostRef.current?.querySelector<HTMLElement>(`[data-entry="${JSON.stringify(pinnedEntry).slice(1, -1)}"]`);
+    if (chip !== null && chip !== undefined) noteChip(pinnedEntry, chip);
+  }, [pinnedEntry]);
+
+  /** 悬停钉住都不在 → 没有卡。钉住的优先（图钉说了算，悬停只管没钉住的）。 */
+  const shownEntry = pinnedEntry ?? hoverEntry;
+
+  /**
+   * **条永远在**：插件装上了就该一直有个入口。
+   *
+   * 早先"没有按钮就整条不画"，于是按钮全被收起（或项目还没有清单）时，`+` 也跟着
+   * 消失——用户既看不到状态，也没地方新建/钉回按钮，只能去手写配置文件。
+   * 现在只把中间那条空地换成一句可操作的说明；真正的"没焦点"也照样显示，
+   * 只是 `+` 会禁用（没有项目根目录可写）。
+   */
+  const hiddenAll = buttons.length === 0;
+  const noEntries = props.entries.length === 0;
 
   const ordered = [...buttons].sort((left, right) => left.order - right.order);
   // 逐级降档：按当前密度估算每条占用，放不下的进溢出菜单。
@@ -1056,10 +1470,15 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
     ` · ${runtime.t('densityCycle')} → ${densityNextLabel}`;
 
   return (
-    <div className="__ru_host">
+    <div className="__ru_host" ref={hostRef}>
       {openPanel === 'add' ? (
-        <div className="__ru_pop">
+        <div className="__ru_pop __ru_popTall">
           <AddPanel {...props} />
+        </div>
+      ) : null}
+      {openPanel === 'manage' ? (
+        <div className="__ru_pop">
+          <ManagePanel {...props} />
         </div>
       ) : null}
       {openPanel === 'settings' ? (
@@ -1100,6 +1519,19 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
         </div>
       ) : null}
 
+      {/* ⌃ 输出悬浮卡：悬停显示 / 拿开就消失 / 📌 可钉住（图钉说的算，悬停只管没钉的） */}
+      {shownEntry !== null ? (
+        <RunPreviewCard
+          run={outputRunOf(runs, props.projectRoot, shownEntry)}
+          runtime={runtime}
+          pinned={pinnedEntry === shownEntry}
+          left={hoverLeft.current[shownEntry] ?? 12}
+          onTogglePin={() => onTogglePin(shownEntry)}
+          onPreviewEnter={() => keepHover(shownEntry)}
+          onPreviewLeave={scheduleHide}
+        />
+      ) : null}
+
       <div className="__ru_bar" data-testid="rundeck-bar" data-density={density}>
         <button
           type="button"
@@ -1114,6 +1546,15 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
         </button>
 
         <div className="__ru_grow">
+          {hiddenAll ? (
+            <span className="__ru_emptyNote">
+              {!noEntries
+                ? runtime.t('allHiddenNote')
+                : props.projectRoot === null
+                  ? runtime.t('noProjectNote')
+                  : runtime.t('noEntriesNote')}
+            </span>
+          ) : null}
           {visible.map((button) => {
             const runId = liveRunOf(button.projectRoot, button.entry);
             const active = button.active === true;
@@ -1141,6 +1582,15 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                 disabled={busy !== null}
                 data-entry={button.entry}
                 data-status={active ? (status ?? 'running') : 'idle'}
+                onMouseEnter={
+                  active
+                    ? (event) => {
+                        keepHover(button.entry);
+                        noteChip(button.entry, event.currentTarget);
+                      }
+                    : undefined
+                }
+                onMouseLeave={active ? scheduleHide : undefined}
                 title={
                   `${button.label ?? button.entryLabel} — ${active ? runtime.t('stop') : runtime.t('run')}` +
                   (active ? `（${statusLabel}）` : '')
@@ -1182,6 +1632,22 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
               <span className="__ru_btnLabel">{runtime.t('runFailed')}</span>
             </button>
           ) : null}
+          {/*
+            ☰ 管理：排序 + 从条上移除，都在同一个面板里。
+
+            **0 个条目也要能打开**：面板里有自己的空状态说明（「这个目录还没有启动项 ·
+            点 + 新建第一条」），禁用它只会让用户分不清"是没东西可管"还是"插件坏了"。
+            早先这里绑的是 `entries.length === 0`，于是那段空状态代码永远走不到。
+          */}
+          <button
+            type="button"
+            className={openPanel === 'manage' ? '__ru_btn __ru_fixed' : '__ru_btn'}
+            onClick={onOpenManage}
+            title={runtime.t('manageTitle')}
+            aria-label={runtime.t('manageTitle')}
+          >
+            ☰
+          </button>
           <button
             type="button"
             className={openPanel === 'add' ? '__ru_btn __ru_fixed' : '__ru_btn'}
@@ -1313,9 +1779,566 @@ interface RowDrag {
   max: number;
 }
 
-/** `+` 面板——"完整管理视图"，顺序即按钮条顺序。 */
+/* ================================================================== *
+ * ＋ 添加面板（新建启动项）
+ * ================================================================== */
+
+/**
+ * 把「KEY=value，每行一条」解析成对象；空行与 `#` 开头的行跳过。
+ *
+ * 坏行返回**原文**而不是行号：界面上直接把它贴在错误里，"错在哪一行"比"第 3 行"
+ * 更不容易数错（环境变量文本框会折行）。host 也会再校验一次，这里只是先拦住。
+ */
+function parseEnvLines(text: string): { env: Record<string, string>; error?: string } {
+  const env: Record<string, string> = {};
+  for (const rawLine of text.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    const equals = line.indexOf('=');
+    if (equals <= 0) return { env: {}, error: line };
+    const key = line.slice(0, equals).trim();
+    if (key.length === 0) return { env: {}, error: line };
+    env[key] = line.slice(equals + 1).trim();
+  }
+  return { env };
+}
+
+/** 复制已有条目时把 `command` + `args` 拼回一行（含空格的参数补引号）。 */
+function quoteArgument(value: string): string {
+  return /\s/u.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value;
+}
+
+/**
+ * `+` 面板：**只负责新建**。
+ *
+ * 早先它真的只有"名称 + 一行命令"两栏——而 `run.json` 支持的工作目录、环境变量、
+ * 长驻、就绪正则、就绪后开浏览器、`onReady`、分组，全都只能手改文件。于是"用界面
+ * 建一个 dev server 按钮"永远是个半成品：起得来，但不会自己开浏览器、不会标就绪。
+ *
+ * 现在的分工（与 VS Code 一致，也符合"别把简单场景做复杂"）：
+ *   - 默认只有**名称 + 命令行**两栏，够建最简单的一条；
+ *   - 其余字段收在「更多设置」里，展开才出现；
+ *   - 顶部先给**探测候选**（`package.json` 的 scripts + 通用模板）与**复制已有条目**，
+ *     点一下把字段预填进表单——预填会顺手展开「更多设置」，因为"它为什么自己长驻了"
+ *     必须在界面上看得见，而不是藏在表单背后。
+ *
+ * 字段最终由 host 的 `buildTaskEntry` 校验并收敛成 `TaskEntry`；界面不落盘，也不把
+ * 命令塞进任何接口（写进清单的仍然是 run.json 里的字面量）。外观（图标/分组）只写
+ * 本机 `layout.json`，不进仓库。
+ */
 function AddPanel(props: BarProps): React.ReactElement {
-  const { entries, runtime, projectRoot, buttons, onPin, onReorder, onClosePanel } = props;
+  const { entries, runtime, projectRoot, onClosePanel, onCreateTask } = props;
+
+  // 基础两栏
+  const [label, setLabel] = React.useState('');
+  const [command, setCommand] = React.useState('');
+  // 「更多设置」
+  const [more, setMore] = React.useState(false);
+  const [cwd, setCwd] = React.useState('');
+  const [envText, setEnvText] = React.useState('');
+  const [background, setBackground] = React.useState(false);
+  const [group, setGroup] = React.useState<TaskGroup>('none');
+  const [entryId, setEntryId] = React.useState('');
+  const [readyPattern, setReadyPattern] = React.useState('');
+  const [openUrl, setOpenUrl] = React.useState(false);
+  const [urlPattern, setUrlPattern] = React.useState('');
+  const [uriFormat, setUriFormat] = React.useState('');
+  const [reveal, setReveal] = React.useState(false);
+  const [onReady, setOnReady] = React.useState('');
+  // 只写本机 layout.json 的外观
+  const [icon, setIcon] = React.useState('');
+  const [buttonGroup, setButtonGroup] = React.useState('');
+
+  const [detection, setDetection] = React.useState<TaskDetection | null>(null);
+  const [detectError, setDetectError] = React.useState<string | null>(null);
+  const [detecting, setDetecting] = React.useState(false);
+
+  const [creating, setCreating] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [created, setCreated] = React.useState<string | null>(null);
+
+  /** 面板一打开就读一次检测：只读、不落盘，点候选才填表。 */
+  const alive = React.useRef(true);
+  React.useEffect(
+    () => () => {
+      alive.current = false;
+    },
+    [],
+  );
+
+  /** 读一次候选。建完一条之后再读一次——"已在清单"的标记不能是创建前的旧状态。 */
+  const loadDetection = React.useCallback(async (): Promise<void> => {
+    if (projectRoot === null) return;
+    setDetecting(true);
+    const result = await detectTasks(projectRoot);
+    if (!alive.current) return;
+    setDetecting(false);
+    if (result.ok) {
+      setDetection({ candidates: result.candidates, warnings: result.warnings });
+      setDetectError(null);
+    } else {
+      setDetection(null);
+      setDetectError(result.message);
+    }
+  }, [projectRoot]);
+
+  React.useEffect(() => {
+    void loadDetection();
+  }, [loadDetection]);
+
+  /** 点一条候选 → 填进表单（预填的字段立刻展开可见）。 */
+  const applyPreset = (candidate: DetectedTask): void => {
+    const preset = candidate.preset;
+    setLabel(candidate.label);
+    setCommand(candidate.command);
+    setCwd(preset.cwd ?? '');
+    setBackground(preset.isBackground === true);
+    setGroup(preset.group ?? 'none');
+    setReadyPattern(preset.readyPattern ?? '');
+    setOpenUrl(preset.openUrl === true);
+    setUrlPattern(preset.urlPattern ?? '');
+    setUriFormat(preset.uriFormat ?? '');
+    setMore(true);
+    setCreated(null);
+    setError(null);
+  };
+
+  /** 从已有条目复制：复制命令与运行参数，**id 一律不复制**（副本要自己的 id）。 */
+  const copyFrom = (id: string): void => {
+    const raw = entries.find((candidate) => candidate.id === id)?.raw;
+    if (raw === undefined) return;
+    setLabel(`${raw.label}（副本）`);
+    setCommand([raw.command, ...(raw.args ?? [])].map(quoteArgument).join(' '));
+    setCwd(raw.options?.cwd ?? '');
+    setEnvText(
+      Object.entries(raw.options?.env ?? {})
+        .map(([key, value]) => `${key}=${value}`)
+        .join('\n'),
+    );
+    setBackground(raw.isBackground === true);
+    setGroup(raw.group ?? 'none');
+    setEntryId('');
+    setReadyPattern(raw.problemMatcher?.background?.endsPattern ?? '');
+    setOpenUrl(raw.serverReadyAction !== undefined);
+    setUrlPattern(raw.serverReadyAction?.pattern ?? '');
+    setUriFormat(raw.serverReadyAction?.uriFormat ?? '');
+    setReveal(raw.presentation?.reveal === 'always');
+    setOnReady(raw.onReady ?? '');
+    setMore(true);
+    setCreated(null);
+    setError(null);
+  };
+
+  /** 创建并钉上条：host 负责校验 + 写进 run.json，失败原因原样显示在面板里。 */
+  const submit = async (): Promise<void> => {
+    const name = label.trim();
+    const line = command.trim();
+    if (creating || name.length === 0 || line.length === 0) return;
+
+    const parsedEnv = parseEnvLines(envText);
+    if (parsedEnv.error !== undefined) {
+      setError(`${runtime.t('fieldEnvInvalid')}${parsedEnv.error}`);
+      setMore(true);
+      return;
+    }
+
+    const env = parsedEnv.env;
+    const input: NewTaskInput = {
+      label: name,
+      command: line,
+      ...(cwd.trim().length > 0 ? { cwd: cwd.trim() } : {}),
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+      ...(background ? { isBackground: true } : {}),
+      ...(group !== 'none' ? { group } : {}),
+      ...(entryId.trim().length > 0 ? { id: entryId.trim() } : {}),
+      ...(readyPattern.trim().length > 0 ? { readyPattern: readyPattern.trim() } : {}),
+      ...(openUrl
+        ? {
+            openUrl: true,
+            ...(urlPattern.trim().length > 0 ? { urlPattern: urlPattern.trim() } : {}),
+            ...(uriFormat.trim().length > 0 ? { uriFormat: uriFormat.trim() } : {}),
+          }
+        : {}),
+      ...(reveal ? { reveal: 'always' as const } : {}),
+      ...(onReady.length > 0 ? { onReady } : {}),
+    };
+
+    setCreating(true);
+    setError(null);
+    try {
+      const result = await onCreateTask(input, {
+        ...(icon.trim().length > 0 ? { icon: icon.trim() } : {}),
+        ...(buttonGroup.trim().length > 0 ? { group: buttonGroup.trim() } : {}),
+      });
+      if (!result.ok) {
+        setError(result.hint !== undefined ? `${result.message}（${result.hint}）` : result.message);
+        return;
+      }
+      // 清空表单，但保留「更多设置」的展开状态：连着建第二条时不用再展开一次。
+      setLabel('');
+      setCommand('');
+      setCwd('');
+      setEnvText('');
+      setBackground(false);
+      setGroup('none');
+      setEntryId('');
+      setReadyPattern('');
+      setOpenUrl(false);
+      setUrlPattern('');
+      setUriFormat('');
+      setReveal(false);
+      setOnReady('');
+      setIcon('');
+      setButtonGroup('');
+      setCreated(result.entry);
+      // 刚建的那条现在"已在清单"了：重读候选，别让防重复的标记停在创建之前。
+      void loadDetection();
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const scripts =
+    detection?.candidates.filter((candidate) => candidate.source === 'package.json') ?? [];
+  const templates =
+    detection?.candidates.filter((candidate) => candidate.source === 'template') ?? [];
+
+  const chips = (candidates: DetectedTask[]): React.ReactElement => (
+    <div className="__ru_chips">
+      {candidates.map((candidate) => (
+        <button
+          key={candidate.key}
+          type="button"
+          className="__ru_chip"
+          disabled={candidate.exists || projectRoot === null}
+          title={candidate.exists ? runtime.t('detectExists') : (candidate.hint ?? candidate.command)}
+          onClick={() => applyPreset(candidate)}
+        >
+          <span>{candidate.label}</span>
+          {candidate.exists ? (
+            <span className="__ru_chipTag">{runtime.t('detectExists')}</span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div>
+      <h4 className="__ru_popTitle">{runtime.t('createTitle')}</h4>
+      <p className="__ru_popHint">{runtime.t('createHint')}</p>
+      {error !== null ? <p className="__ru_error">❌ {error}</p> : null}
+      {created !== null ? (
+        <p className="__ru_popHint">✓ {created} · {runtime.t('createdNote')}</p>
+      ) : null}
+      {projectRoot === null ? <p className="__ru_popNote">{runtime.t('noProjectNote')}</p> : null}
+
+      {projectRoot !== null ? (
+        <div className="__ru_panel">
+          <div className="__ru_panelHead">
+            <span className="__ru_panelTitle">{runtime.t('detectTitle')}</span>
+            <span className="__ru_panelHint">
+              {detecting ? runtime.t('detectLoading') : runtime.t('detectHint')}
+            </span>
+          </div>
+          {detectError !== null ? <p className="__ru_error">❌ {detectError}</p> : null}
+          {detection !== null && scripts.length > 0 ? (
+            <>
+              <p className="__ru_panelHint">{runtime.t('detectScripts')}</p>
+              {chips(scripts)}
+            </>
+          ) : null}
+          {detection !== null && !detecting && scripts.length === 0 ? (
+            <p className="__ru_panelHint">{runtime.t('detectEmpty')}</p>
+          ) : null}
+          {templates.length > 0 ? (
+            <>
+              <p className="__ru_panelHint" style={{ marginTop: 8 }}>
+                {runtime.t('detectTemplates')}
+              </p>
+              {chips(templates)}
+            </>
+          ) : null}
+          {(detection?.warnings ?? []).map((warning) => (
+            <p className="__ru_panelHint" key={warning}>· {warning}</p>
+          ))}
+        </div>
+      ) : null}
+
+      {entries.length > 0 && projectRoot !== null ? (
+        <div className="__ru_field" style={{ marginBottom: 10 }}>
+          <span className="__ru_fieldLabel">{runtime.t('copyTitle')}</span>
+          <div className="__ru_fieldBody">
+            <select
+              className="__ru_select"
+              value=""
+              onChange={(event) => copyFrom(event.target.value)}
+              aria-label={runtime.t('copyTitle')}
+            >
+              <option value="">{runtime.t('copyPlaceholder')}</option>
+              {entries.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="__ru_form">
+        <div className="__ru_field">
+          <span className="__ru_fieldLabel">{runtime.t('fieldName')}</span>
+          <div className="__ru_fieldBody">
+            <input
+              className="__ru_input __ru_inputGrow"
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder={runtime.t('newTaskLabelPlaceholder')}
+              aria-label={runtime.t('fieldName')}
+              spellCheck={false}
+              disabled={projectRoot === null}
+            />
+          </div>
+        </div>
+        <div className="__ru_field">
+          <span className="__ru_fieldLabel">{runtime.t('fieldCommand')}</span>
+          <div className="__ru_fieldBody">
+            <input
+              className="__ru_input __ru_inputGrow"
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+              placeholder={runtime.t('newTaskCommandPlaceholder')}
+              aria-label={runtime.t('fieldCommand')}
+              spellCheck={false}
+              disabled={projectRoot === null}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void submit();
+                }
+              }}
+            />
+          </div>
+        </div>
+        <p className="__ru_fieldHint" style={{ paddingLeft: 100 }}>
+          {runtime.t('commandSplitHint')}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        className="__ru_moreToggle"
+        aria-expanded={more}
+        onClick={() => setMore(!more)}
+      >
+        {more ? `▾ ${runtime.t('moreHide')}` : `▸ ${runtime.t('moreShow')}`}
+      </button>
+
+      {more ? (
+        <div className="__ru_advanced" style={{ marginTop: 8 }}>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldCwd')}</span>
+            <div className="__ru_fieldBody">
+              <input
+                className="__ru_input __ru_inputGrow"
+                value={cwd}
+                onChange={(event) => setCwd(event.target.value)}
+                placeholder={runtime.t('fieldCwdPlaceholder')}
+                aria-label={runtime.t('fieldCwd')}
+                spellCheck={false}
+              />
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldEnv')}</span>
+            <div className="__ru_fieldBody">
+              <textarea
+                className="__ru_textarea"
+                value={envText}
+                onChange={(event) => setEnvText(event.target.value)}
+                placeholder={runtime.t('fieldEnvPlaceholder')}
+                aria-label={runtime.t('fieldEnv')}
+                spellCheck={false}
+                rows={3}
+              />
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldId')}</span>
+            <div className="__ru_fieldBody">
+              <input
+                className="__ru_input __ru_inputGrow"
+                value={entryId}
+                onChange={(event) => setEntryId(event.target.value)}
+                placeholder={runtime.t('fieldIdPlaceholder')}
+                aria-label={runtime.t('fieldId')}
+                spellCheck={false}
+              />
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldGroup')}</span>
+            <div className="__ru_fieldBody">
+              <select
+                className="__ru_select"
+                value={group}
+                onChange={(event) => setGroup(event.target.value as TaskGroup)}
+                aria-label={runtime.t('fieldGroup')}
+              >
+                <option value="none">{runtime.t('groupNone')}</option>
+                <option value="build">{runtime.t('groupBuild')}</option>
+                <option value="test">{runtime.t('groupTest')}</option>
+              </select>
+              <label className="__ru_check">
+                <input
+                  type="checkbox"
+                  checked={background}
+                  onChange={(event) => setBackground(event.target.checked)}
+                />
+                <span>{runtime.t('fieldBackground')}</span>
+              </label>
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldReady')}</span>
+            <div className="__ru_fieldBody">
+              <input
+                className="__ru_input __ru_inputGrow"
+                value={readyPattern}
+                onChange={(event) => setReadyPattern(event.target.value)}
+                placeholder={runtime.t('fieldReadyPlaceholder')}
+                aria-label={runtime.t('fieldReady')}
+                spellCheck={false}
+              />
+              <p className="__ru_fieldHint" style={{ flexBasis: '100%' }}>
+                {runtime.t('fieldReadyHint')}
+              </p>
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldOpenUrl')}</span>
+            <div className="__ru_fieldBody">
+              <label className="__ru_check">
+                <input
+                  type="checkbox"
+                  checked={openUrl}
+                  onChange={(event) => setOpenUrl(event.target.checked)}
+                />
+                <span>{runtime.t('fieldOpenUrl')}</span>
+              </label>
+              {openUrl ? (
+                <>
+                  <input
+                    className="__ru_input __ru_inputGrow"
+                    value={urlPattern}
+                    onChange={(event) => setUrlPattern(event.target.value)}
+                    placeholder={runtime.t('fieldUrlPatternPlaceholder')}
+                    aria-label={runtime.t('fieldUrlPattern')}
+                    spellCheck={false}
+                  />
+                  <input
+                    className="__ru_input"
+                    value={uriFormat}
+                    onChange={(event) => setUriFormat(event.target.value)}
+                    placeholder={runtime.t('fieldUriFormatPlaceholder')}
+                    aria-label={runtime.t('fieldUriFormat')}
+                    spellCheck={false}
+                  />
+                </>
+              ) : null}
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('output')}</span>
+            <div className="__ru_fieldBody">
+              <label className="__ru_check">
+                <input
+                  type="checkbox"
+                  checked={reveal}
+                  onChange={(event) => setReveal(event.target.checked)}
+                />
+                <span>{runtime.t('fieldReveal')}</span>
+              </label>
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldOnReady')}</span>
+            <div className="__ru_fieldBody">
+              <select
+                className="__ru_select"
+                value={onReady}
+                onChange={(event) => setOnReady(event.target.value)}
+                aria-label={runtime.t('fieldOnReady')}
+              >
+                <option value="">{runtime.t('fieldOnReadyNone')}</option>
+                {entries.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{runtime.t('fieldIcon')}</span>
+            <div className="__ru_fieldBody">
+              <input
+                className="__ru_input"
+                value={icon}
+                onChange={(event) => setIcon(event.target.value)}
+                placeholder={runtime.t('fieldIconPlaceholder')}
+                aria-label={runtime.t('fieldIcon')}
+                spellCheck={false}
+              />
+              <input
+                className="__ru_input"
+                value={buttonGroup}
+                onChange={(event) => setButtonGroup(event.target.value)}
+                placeholder={runtime.t('fieldButtonGroupPlaceholder')}
+                aria-label={runtime.t('fieldButtonGroup')}
+                spellCheck={false}
+              />
+              <p className="__ru_fieldHint" style={{ flexBasis: '100%' }}>
+                {runtime.t('fieldAppearanceHint')}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="__ru_sep" />
+      <div className="__ru_rowActions" style={{ justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="__ru_btn __ru_fixed"
+          disabled={
+            creating ||
+            projectRoot === null ||
+            label.trim().length === 0 ||
+            command.trim().length === 0
+          }
+          onClick={() => void submit()}
+        >
+          {creating ? '…' : runtime.t('newTaskCreate')}
+        </button>
+        <button type="button" className="__ru_btn" onClick={onClosePanel}>
+          {runtime.t('addClose')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ☰ 管理面板：**排序 + 从条上移除 / 钉回**。
+ *
+ * 为什么不拆成两个按钮：这两件事都是在管"这条按钮在不在条上、排第几"，
+ * 在同一个列表里拖一下、点一下最顺手，眼睛不用在两个面板之间来回换。
+ * 新建任务属于另一件事，在 `+` 面板里。
+ */
+function ManagePanel(props: BarProps): React.ReactElement {
+  const { entries, runtime, projectRoot, buttons, onPin, onReorder, onClosePanel, onDeleteTask } = props;
   const [order, setOrder] = React.useState<string[]>(() =>
     [...entries]
       .sort((left, right) => {
@@ -1329,6 +2352,8 @@ function AddPanel(props: BarProps): React.ReactElement {
   /** 松手后那一行的 FLIP 落位动画（`entry` 是它，`dy` 从"松手那一刻的位置"过渡到 0）。 */
   const [settle, setSettle] = React.useState<{ entry: string; dy: number } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  /** 正在二次确认"删除任务"的那条（删除会改 run.json，必须多问一句）。 */
+  const [confirming, setConfirming] = React.useState<string | null>(null);
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   /** 拖动数据放在 ref 里当**唯一真源**：`pointerup` 不依赖 React 有没有重渲染过。 */
@@ -1338,6 +2363,36 @@ function AddPanel(props: BarProps): React.ReactElement {
   const endRef = React.useRef<(commit: boolean) => void>(() => {});
 
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
+
+  /** 钉上去 / 从条上移除：管理面板里唯一会写按钮成员资格的动作。 */
+  const pinEntry = async (entry: string, pinned: boolean): Promise<void> => {
+    setError(null);
+    try {
+      await onPin(entry, pinned);
+    } catch {
+      setError(runtime.t('saveFailed'));
+    }
+  };
+
+  /** 全部钉回来：条上一条都没有时的逃生口。 */
+  const restoreAll = async (): Promise<void> => {
+    for (const entry of entries) {
+      if (buttons.some((button) => button.entry === entry.id)) continue;
+      await pinEntry(entry.id, true);
+    }
+  };
+
+  /** 删除任务：真的改项目 run.json，所以要先点一下「删除」再确认。 */
+  const removeEntry = async (entry: string): Promise<void> => {
+    setConfirming(null);
+    setError(null);
+    try {
+      const result = await onDeleteTask(entry);
+      if (!result.ok) setError(result.message);
+    } catch {
+      setError(runtime.t('saveFailed'));
+    }
+  };
 
   const move = (from: number, to: number): void => {
     if (to < 0 || to >= order.length || to === from) return;
@@ -1515,9 +2570,14 @@ function AddPanel(props: BarProps): React.ReactElement {
 
   return (
     <div ref={listRef}>
-      <h4 className="__ru_popTitle">{runtime.t('addTitle')}</h4>
-      <p className="__ru_popHint">{runtime.t('addHint')}</p>
+      <h4 className="__ru_popTitle">{runtime.t('manageTitle')}</h4>
+      <p className="__ru_popHint">{runtime.t('manageHint')}</p>
       {error !== null ? <p className="__ru_error">❌ {error}</p> : null}
+      {projectRoot === null ? (
+        <p className="__ru_popNote">{runtime.t('noProjectNote')}</p>
+      ) : entries.length === 0 ? (
+        <p className="__ru_popNote">{runtime.t('noEntriesNote')}</p>
+      ) : null}
 
       {order.map((entryId, index) => {
         const entry = byId.get(entryId);
@@ -1593,16 +2653,48 @@ function AddPanel(props: BarProps): React.ReactElement {
                 type="button"
                 className="__ru_btn"
                 disabled={projectRoot === null}
-                onClick={() => {
-                  void onPin(entryId, !pinned).catch(() => setError(runtime.t('saveFailed')));
-                }}
+                onClick={() => void pinEntry(entryId, !pinned)}
               >
                 {pinned ? runtime.t('addHide') : runtime.t('addPin')}
               </button>
+              {/* 删除是改 run.json 的破坏性操作：先变成「确认删除 / 取消」再动手。 */}
+              {confirming === entryId ? (
+                <>
+                  <button
+                    type="button"
+                    className="__ru_btn __ru_errorBtn"
+                    onClick={() => void removeEntry(entryId)}
+                  >
+                    {runtime.t('deleteConfirm')}
+                  </button>
+                  <button type="button" className="__ru_btn" onClick={() => setConfirming(null)}>
+                    {runtime.t('deleteCancel')}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="__ru_btn"
+                  title={runtime.t('deleteHint')}
+                  disabled={projectRoot === null}
+                  onClick={() => setConfirming(entryId)}
+                >
+                  {runtime.t('deleteEntry')}
+                </button>
+              )}
             </div>
           </div>
         );
       })}
+
+      {buttons.length === 0 && entries.length > 0 ? (
+        <div className="__ru_popNote __ru_popNoteRow">
+          <span>{runtime.t('allHiddenNote')}</span>
+          <button type="button" className="__ru_btn __ru_fixed" onClick={() => void restoreAll()}>
+            {runtime.t('restoreAll')}
+          </button>
+        </div>
+      ) : null}
 
       <div className="__ru_sep" />
       <div className="__ru_rowActions" style={{ justifyContent: 'flex-end' }}>
@@ -1654,6 +2746,255 @@ function ErrorPanel(props: {
           {runtime.t('errorClose')}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ================================================================== *
+ * 颜色码翻译器（控制台上色那一小块）
+ * ================================================================== */
+
+/** 一个带颜色的文本片段（ansiSpans 的产出）。 */
+interface AnsiSpan {
+  text: string;
+  bold: boolean;
+  dim: boolean;
+  italic: boolean;
+  underline: boolean;
+  /** ANSI 前景色（对照表外的值是 undefined = 用界面自己的字色）。 */
+  fg?: string;
+  bg?: string;
+}
+
+/**
+ * 十六色对照表：偏爱深底界面、照 xterm 的深色盘习惯，亮色档更浅。
+ *
+ * 注意这不是"你在 pwsh 里设的主题"——那东西只在交互式 pwsh 里出现（有提示符
+ * 才谈得上主题），按钮跑的是脚本，从 VS Code 的任务输出里同样见不到它。
+ * 这张表换的是"颜色的明暗"，理论上以后可以对齐到宿主界面的主题变量。
+ */
+const ANSI_COLORS: Record<number, string> = {
+  30: '#6e7178', 31: '#e06c75', 32: '#98c379', 33: '#e5c07b',
+  34: '#61afef', 35: '#c678dd', 36: '#56b6c2', 37: '#c8ccd4',
+  90: '#9a9da4', 91: '#ff7b86', 92: '#7ee787', 93: '#ffd479',
+  94: '#79c0ff', 95: '#d2a8ff', 96: '#76d7df', 97: '#ffffff',
+  40: '#2c2c2e', 41: '#5c2b2f', 42: '#28402a', 43: '#3d3722',
+  44: '#25384d', 45: '#3b2a44', 46: '#243c40', 47: '#3a3d44',
+  100: '#3a3d44', 101: '#7a3b41', 102: '#3a563e', 103: '#5c5230',
+  104: '#33526e', 105: '#543b62', 106: '#33555c', 107: '#5a5e66',
+};
+
+/**
+ * 带颜色码的行 → 带样式的文本片段（纯函数，离线可验）。
+ *
+ * 管四件事：
+ *   1. SGR（`ESC[..m`）转成 fg/bg/粗体/斜体/下划线/暗淡——颜色状态**跨行延续**
+ *      （终端就是这么画的，绿了的 `✓` 不会下一行突然掉色）；
+ *   2. 光标/擦除序列（`ESC[2K`、`ESC[?25h` 这类 ConPTY 重绘残渣）直接扔掉，
+ *      不让它变成可见的怪字形；
+ *   3. 普通字符按当前颜色拼起来。渲染端把片段铺进 `<pre>` 就得彩色控制台；
+ *   4. **行与行之间补一个换行片段**。这一条是"输出全挤在一起"的根因修复：
+ *      `lines` 是**行数组**，片段列表里若不写换行，铺进 `<pre>` 后所有行会首尾
+ *      相接变成一行（`<pre>` 只保留"文字里真的有的"空白）。空行同样要保住——
+ *      它也是脚本输出的一部分（分节、对齐）。
+ */
+function ansiSpans(lines: string[]): AnsiSpan[] {
+  const out: AnsiSpan[] = [];
+  let bold = false;
+  let dim = false;
+  let italic = false;
+  let underline = false;
+  let fg: string | undefined;
+  let bg: string | undefined;
+  let buffer = '';
+  const flush = (): void => {
+    if (buffer.length === 0) return;
+    out.push({
+      text: buffer,
+      bold,
+      dim,
+      italic,
+      underline,
+      ...(fg !== undefined ? { fg } : {}),
+      ...(bg !== undefined ? { bg } : {}),
+    });
+    buffer = '';
+  };
+  const applySgr = (codes: string | undefined): void => {
+    const parts = (codes ?? '').length === 0 ? ['0'] : (codes ?? '').split(';');
+    for (const part of parts) {
+      const code = Number(part);
+      if (!Number.isFinite(code)) continue;
+      if (code === 0) {
+        bold = dim = italic = underline = false;
+        fg = undefined;
+        bg = undefined;
+      } else if (code === 1) bold = true;
+      else if (code === 2) dim = true;
+      else if (code === 3) italic = true;
+      else if (code === 4) underline = true;
+      else if (code === 22) { bold = false; dim = false; }
+      else if (code === 23) italic = false;
+      else if (code === 24) underline = false;
+      else if (code === 39) fg = undefined;
+      else if (code === 49) bg = undefined;
+      else if (code >= 30 && code <= 37) fg = ANSI_COLORS[code];
+      else if (code >= 90 && code <= 97) fg = ANSI_COLORS[code];
+      else if (code >= 40 && code <= 47) bg = ANSI_COLORS[code];
+      else if (code >= 100 && code <= 107) bg = ANSI_COLORS[code];
+    }
+  };
+  // 依次认：SGR（要处理）/ OSC 链接协议（丢）/ 其余 ESC+一字符（丢）。
+  const scanner =
+    /\u001B\[([0-9;?]*)([A-Za-z])|\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u001B./u;
+  for (const [index, line] of lines.entries()) {
+    let rest = line;
+    while (rest.length > 0) {
+      const hit = scanner.exec(rest);
+      if (hit === null) {
+        buffer += rest;
+        break;
+      }
+      buffer += rest.slice(0, hit.index);
+      if (hit[2] === 'm') {
+        // 先把当前颜色下的字刷出去，再换色——顺序不能倒。
+        flush();
+        applySgr(hit[1]);
+      }
+      rest = rest.slice(hit.index + hit[0].length);
+    }
+    flush();
+    // 行边界：独立一个**无样式**片段，别把换行并进上/下一段的颜色里
+    // （并进去的话，带背景色的行会多画出一条底色带，而换行本身不吃颜色）。
+    if (index < lines.length - 1) {
+      out.push({ text: '\n', bold: false, dim: false, italic: false, underline: false });
+    }
+  }
+  flush();
+  return out;
+}
+
+/* ================================================================== *
+ * ⌃ 输出悬浮卡（悬停显示 / 拿开就消失 / 图钉可钉住）
+ * ================================================================== */
+
+/**
+ * 给一条 run 挑"输出该显示谁"：先挑正在跑的那条，没有就挑最近一条已退出的（末跑
+ * 留下的现场——构建失败/启动失败时这块就是唯一证据）。
+ *
+ * 对着 **entry** 而不是 runId：用户认的是按钮（条目），停止后重跑换的是 runId，
+ * 面板必须跟着按钮走。`runs` 是按 startedAt 倒序排列的（listRuns 排过），
+ * 所以"candidates[0]"就是最近一条。
+ */
+function outputRunOf(
+  runs: RunRecord[],
+  projectRoot: string | null,
+  entryId: string | null,
+): RunRecord | undefined {
+  if (entryId === null) return undefined;
+  const candidates = runs.filter(
+    (run) =>
+      run.entryId === entryId && (projectRoot === null || run.projectRoot === projectRoot),
+  );
+  const live = candidates.find((candidate) => candidate.status !== 'exited');
+  return live ?? candidates[0];
+}
+
+/**
+ * 输出悬浮卡 —— 出现的规矩照字面执行：
+ *
+ *   - 鼠标放到**正在跑**的按钮上 → 卡片在那颗按钮上方浮出，拿开就消失；
+ *   - 卡片自己"接管"悬停：从按钮挪进卡片那段间隙不闪断（160ms 延迟窗）；
+ *   - 卡上有一颗 📌：钉住后常驻，拿开也不消失；再点一次拔钉，恢复悬停规矩；
+ *   - `presentation.reveal: "always"` 的条目跑起来那一刻自动钉一次（run.json 承诺的）。
+ *
+ * 尺寸刻意收窄：≤560px 宽、≤250px 高，盖不满条——输出短的时候卡自己就矮。
+ *
+ * 数据**不走新通路**：宿主 800ms 把终端新切出来的行抄进 `RunRecord.tail`
+ * （留最近 200 行），界面 2.5 秒一轮的 `/state` 顺手带回（≈2.5 秒一批）。
+ * 进程停了内容保留（末跑的现场就是查"为什么失败"的证据）。
+ */
+/** 把 ansiSpans 的片段铺成 `<pre>` 的内容（颜色跟着脚本走，没颜色的行就是默认字色）。 */
+function ColoredLog(props: { lines: string[] }): React.ReactElement {
+  return (
+    <>
+      {ansiSpans(props.lines).map((span, index) => {
+        const style: React.CSSProperties = {
+          ...(span.fg !== undefined ? { color: span.fg } : {}),
+          ...(span.bg !== undefined ? { backgroundColor: span.bg } : {}),
+          ...(span.bold ? { fontWeight: 600 } : {}),
+          ...(span.dim ? { opacity: 0.65 } : {}),
+          ...(span.italic ? { fontStyle: 'italic' } : {}),
+          ...(span.underline ? { textDecoration: 'underline' } : {}),
+        };
+        return (
+          <span key={index} style={style}>
+            {span.text}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+interface RunPreviewCardProps {
+  run: RunRecord | undefined;
+  runtime: Runtime;
+  pinned: boolean;
+  /** 卡片左缘（px，相对 `__ru_host`；已夹在条的宽度以内）。 */
+  left: number;
+  onTogglePin(): void;
+  onPreviewEnter(): void;
+  onPreviewLeave(): void;
+}
+
+function RunPreviewCard(props: RunPreviewCardProps): React.ReactElement {
+  const { run, runtime, pinned, left, onTogglePin, onPreviewEnter, onPreviewLeave } = props;
+  return (
+    <div
+      className={pinned ? '__ru_pop __ru_hover __ru_hoverPinned' : '__ru_pop __ru_hover'}
+      style={{ left }}
+      onMouseEnter={onPreviewEnter}
+      onMouseLeave={onPreviewLeave}
+    >
+      <div className="__ru_hoverHead">
+        <span className="__ru_hoverLabel">{run?.label ?? '—'}</span>
+        {/* 状态徽章就贴在脚本名旁边（圈一圈的胶囊）；名字右边由弹簧占位，把图钉推到最右。 */}
+        {run !== undefined ? (
+          <span className="__ru_statusBadge" data-status={run.status}>
+            {runtime.t(run.status)}
+          </span>
+        ) : null}
+        <span className="__ru_hoverSpring" aria-hidden="true" />
+        {/* 图钉 + 状态文字：未钉 = 📌 钉住（"把这颗钉按下去"），已钉 = 📍 已钉住（钉在原地）。
+            上一版两个 emoji 不带文字，谁读成"钉住了"全凭联想，看起来就像状态反了；
+            现在文字把状态说死，钉住的卡另有品牌色描边（__ru_hoverPinned）兜底。
+            tooltip 沿用 pin/unpin 那对长文案，把"点了会发生什么"也讲明白。 */}
+        <button
+          type="button"
+          className="__ru_pinBtn"
+          onClick={onTogglePin}
+          aria-pressed={pinned}
+          title={pinned ? runtime.t('unpin') : runtime.t('pin')}
+          aria-label={pinned ? runtime.t('unpin') : runtime.t('pin')}
+        >
+          <span aria-hidden="true">{pinned ? '📍' : '📌'}</span>
+          <span className="__ru_pinText">
+            {pinned ? runtime.t('pinStateOn') : runtime.t('pinStateOff')}
+          </span>
+        </button>
+      </div>
+      {run?.rawTail !== undefined && run.rawTail.length > 0 ? (
+        <pre className="__ru_outView">
+          <ColoredLog lines={run.rawTail} />
+        </pre>
+      ) : run?.tail !== undefined && run.tail.length > 0 ? (
+        <pre className="__ru_outView">{run.tail.join('\n')}</pre>
+      ) : (
+        <pre className="__ru_outView">
+          {run === undefined ? runtime.t('settingsNoRuns') : runtime.t('outputEmpty')}
+        </pre>
+      )}
     </div>
   );
 }
@@ -1794,7 +3135,9 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
    * 就是没有任何反馈（早先 host 只登记不执行，界面却显示"运行中"）。
    */
   const [lastError, setLastError] = React.useState<string | null>(null);
-  const [panel, setPanel] = React.useState<'none' | 'add' | 'settings' | 'error' | 'overflow'>('none');
+  const [panel, setPanel] = React.useState<'none' | 'add' | 'manage' | 'settings' | 'error' | 'overflow'>('none');
+  /** 输出悬浮卡钉在哪条 entry（null = 没钉；reveal:always 也会自动钉）。 */
+  const [pinnedEntry, setPinnedEntry] = React.useState<string | null>(null);
   const [density, setDensity] = React.useState<ButtonDensity>('full');
 
   const pull = React.useCallback(async (): Promise<RundeckState | null> => {
@@ -1814,7 +3157,8 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       buttons: result.buttons.length,
     });
     // 结果签名一变就再报一行（不同会话、不同项目、不同原因各留一行）。
-    // `hidden` 是"这一帧条不会画出来"——把"没按钮"这件事变成日志里能读到的事实。
+    // `emptyBar` 是"条上没有任何可点的东西"——条本身现在**永远会画**（`+`/⚙ 常驻），
+    // 所以不再有"整条隐藏"这回事，日志里也只报"空不空"。
     reportKeyed(
       `state:${sessionId ?? '(no-session)'}|${cwd ?? ''}|${result.focused?.projectRoot ?? ''}|` +
         `${result.focused?.reason ?? ''}|${result.buttons.length}`,
@@ -1826,7 +3170,8 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
         focused: result.focused?.projectRoot ?? null,
         reason: result.focused?.reason ?? null,
         buttons: result.buttons.length,
-        hidden: result.buttons.length === 0,
+        // 条永远会画：这里只报告"有没有可点的按钮"。
+        emptyBar: result.buttons.length === 0 && result.focusedEntries.length === 0,
       },
     );
     // 客户端报的 cwd 在 host 侧没解析出项目时，让它现读一次（任意目录都能用）。
@@ -1897,6 +3242,13 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       setBusy(null);
       // 起不来时必须说出来：早先这里把结果丢掉，于是"点了没反应"完全无从查起。
       setLastError(result.ok ? null : `${result.message}${result.hint !== undefined ? `（${result.hint}）` : ''}`);
+      // `presentation.reveal: "always"`（VS Code 的原义：这条命令跑起来时把它的
+      // 输出亮出来）。run.json 里的承诺由界面兑现：跑起来那一刻**自动钉住**这条的
+      // 悬浮预览卡（小卡、一键拔钉；拔了就回到"悬停才出现"的规矩）。
+      if (result.ok) {
+        const entry = state.focusedEntries.find((candidate) => candidate.id === entryId);
+        if (entry?.presentation?.reveal === 'always') setPinnedEntry(entryId);
+      }
       await pull();
       return result;
     },
@@ -1924,8 +3276,11 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       onOpenOverflow={() => setPanel('overflow')}
       onCycleDensity={() => setDensity(nextDensity())}
       onOpenAdd={() => setPanel(panel === 'add' ? 'none' : 'add')}
+      onOpenManage={() => setPanel(panel === 'manage' ? 'none' : 'manage')}
       onOpenSettings={() => setPanel(panel === 'settings' ? 'none' : 'settings')}
       onOpenError={() => setPanel(panel === 'error' ? 'none' : 'error')}
+      pinnedEntry={pinnedEntry}
+      onTogglePin={(entry) => setPinnedEntry(pinnedEntry === entry ? null : entry)}
       entries={state.focusedEntries}
       projectRoot={state.focused?.projectRoot ?? null}
       configFile={state.focused?.configFile}
@@ -1940,6 +3295,34 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       onPin={async (entry, pinned) => {
         await call('/button', 'POST', { entry, pinned });
         await pull();
+      }}
+      onCreateTask={async (input, button) => {
+        const root = state.focused?.projectRoot ?? null;
+        if (root === null) {
+          return { ok: false, code: 'NOT_FOUND', message: runtime.t('noFocus') };
+        }
+        const result = await createTask(root, input);
+        // 用户的意图是"加一个按钮"，不是"往文件里塞一条记录"：创建成功就顺手钉上条。
+        // 图标/分组走本地覆盖（`/button`），不进 run.json——外观是本机的事。
+        if (result.ok) {
+          await call('/button', 'POST', {
+            entry: result.entry,
+            pinned: true,
+            ...(button.icon !== undefined ? { icon: button.icon } : {}),
+            ...(button.group !== undefined ? { group: button.group } : {}),
+          });
+          await pull();
+        }
+        return result;
+      }}
+      onDeleteTask={async (entryId) => {
+        const root = state.focused?.projectRoot ?? null;
+        if (root === null) {
+          return { ok: false, code: 'NOT_FOUND', message: runtime.t('noFocus') };
+        }
+        const result = await deleteTask(root, entryId);
+        if (result.ok) await pull();
+        return result;
       }}
     />
   );
@@ -2048,6 +3431,10 @@ export default Object.assign(plugin, {
     ErrorPanel,
     FloatingBar,
     FloatingBarHost,
+    ManagePanel,
+    POPUP_OFFSET,
+    POPUP_SPACE_VAR,
+    RunPreviewCard,
     SettingsPanel,
     STACK_LIFT_RULE,
     cwdOfSession,
@@ -2056,8 +3443,12 @@ export default Object.assign(plugin, {
     injectStyles,
     labelFor,
     moveInOrder,
+    ansiSpans,
     openReadyUrl,
+    parseEnvLines,
+    popupSpaceFor,
     previewOffsets,
+    quoteArgument,
     restTops,
     truncate,
     EN,

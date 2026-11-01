@@ -32,11 +32,27 @@ async function check(name, body) {
 }
 
 /** 在一个假的 ModuleLoader 环境里取出插件导出。 */
-function loadPlugin() {
+function loadPlugin(options = {}) {
+  /**
+   * `truthyState`：把布尔型 `useState` 的初始值换成 `true`，用来渲染"展开态"
+   * （「更多设置」那段只有 `more === true` 才会画出来）。只翻**布尔**初始值——
+   * 把 `detection`（对象/null）也翻成 `true` 只是假状态，不是真实渲染路径。
+   * 组件函数可以这样直接调用：我们的假 React 只把 JSX 收成一棵普通对象树。
+   */
+  const truthyState = options.truthyState === true;
   const react = {
     createElement: (type, props, ...children) => ({ type, props, children }),
-    useState: (initial) => [initial, () => {}],
+    useState: (initial) => [
+      truthyState && typeof initial === 'boolean'
+        ? true
+        : typeof initial === 'function'
+          ? initial()
+          : initial,
+      () => {},
+    ],
     useEffect: () => {},
+    useLayoutEffect: () => {},
+    useMemo: (fn) => fn(),
     useCallback: (fn) => fn,
     useRef: (initial) => ({ current: initial }),
   };
@@ -85,10 +101,85 @@ await (async () => {
     assert.deepEqual([...exported.inject].sort(), ['locale', 'slots']);
   });
 
-  await check('浮动条的五个组件都在（含失败原因面板）', () => {
-    for (const name of ['FloatingBar', 'FloatingBarHost', 'AddPanel', 'SettingsPanel', 'ErrorPanel']) {
+  await check('浮动条的组件都在（含新建/管理面板、失败原因面板与输出悬浮卡）', () => {
+    for (const name of ['FloatingBar', 'FloatingBarHost', 'AddPanel', 'ManagePanel', 'SettingsPanel', 'ErrorPanel', 'RunPreviewCard']) {
       assert.equal(typeof x[name], 'function', `${name} 不是函数`);
     }
+  });
+
+  await check('＋＝只负责新建、☰＝管理（排序 + 收起 + 删除）', () => {
+    for (const key of ['createTitle', 'createHint', 'manageTitle', 'manageHint', 'deleteEntry', 'deleteConfirm', 'deleteCancel']) {
+      assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
+      assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
+    }
+  });
+
+  await check('0 个条目时 ☰ 管理仍能打开：按钮不禁用，面板给出空状态说明', () => {
+    const plugin = loadPlugin();
+    const internals = plugin.exported.internals;
+    const runtime = { t: (key) => internals.ZH[key] ?? key };
+    /** FloatingBar / ManagePanel 渲染需要的那组 props（不会被触发的回调给空实现）。 */
+    const props = {
+      buttons: [],
+      runs: [],
+      density: 'full',
+      runtime,
+      busy: null,
+      actions: { onRun: async () => ({ ok: true }), onStop: async () => ({ ok: true }) },
+      onCycleDensity: () => {},
+      onOpenAdd: () => {},
+      onOpenManage: () => {},
+      onOpenSettings: () => {},
+      onOpenError: () => {},
+      onOpenOverflow: () => {},
+      openPanel: 'none',
+      onClosePanel: () => {},
+      entries: [],
+      projectRoot: 'D:/p',
+      warnings: [],
+      capabilities: { subprocess: true },
+      hostVersion: '0.0.0',
+      configSource: 'test',
+      onReorder: async () => {},
+      onPin: async () => {},
+      onCreateTask: async () => ({ ok: true, entry: 'x' }),
+      onDeleteTask: async () => ({ ok: true }),
+      lastError: null,
+      pinnedEntry: null,
+      onTogglePin: () => {},
+    };
+
+    /** 摊平 JSX 对象树，逐节点判断（假 React 不渲染，只产出普通对象）。 */
+    const walk = (node, visit) => {
+      if (node === null || node === undefined) return;
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child, visit);
+        return;
+      }
+      if (typeof node !== 'object') return;
+      visit(node);
+      walk(node.children, visit);
+    };
+
+    // ☰ 按钮：0 个条目时不能再是 disabled（否则点了没反应，用户分不清是空还是坏了）。
+    let manage = null;
+    walk(internals.FloatingBar(props), (node) => {
+      if (node.type === 'button' && node.props?.onClick === props.onOpenManage) manage = node;
+    });
+    assert.ok(manage !== null, '没有找到 ☰ 管理按钮');
+    assert.notEqual(manage.props.disabled, true, '0 个条目时 ☰ 被禁用了，管理面板打不开');
+
+    // 面板打开后不是一片空白：要说明"这个目录还没有启动项"。
+    const texts = [];
+    walk(internals.ManagePanel(props), (node) => {
+      for (const child of node.children ?? []) {
+        if (typeof child === 'string') texts.push(child);
+      }
+    });
+    assert.ok(
+      texts.includes(internals.ZH.noEntriesNote),
+      `管理面板没有显示空状态说明（实际文本：${JSON.stringify(texts)}）`,
+    );
   });
 
   /* ── 纯函数 ── */
@@ -142,7 +233,8 @@ await (async () => {
     const zh = Object.keys(x.ZH);
     for (const key of [
       'run', 'stop', 'densityFull', 'densityCompact', 'densityIcon', 'densityCycle',
-      'overflow', 'add', 'settings', 'addTitle', 'addHint', 'addPinned', 'addUnpinned',
+      'overflow', 'add', 'settings', 'createTitle', 'createHint', 'manageTitle', 'manageHint',
+      'addPinned', 'addUnpinned',
       'addPin', 'addHide', 'settingsTitle', 'settingsDensity', 'settingsRuns',
       'settingsWarnings', 'settingsCapability', 'noFocus',
       // 失败原因面板（点"启动失败"看到的是原因，不是设置界面）
@@ -151,6 +243,195 @@ await (async () => {
       assert.ok(zh.includes(key), `ZH 缺 ${key}`);
       assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
     }
+  });
+
+  await check('输出悬浮卡：样式卡上、文案中英各一份（含图钉那一对）', () => {
+    const css = String(x.CSS ?? '');
+    assert.ok(css.includes('.__ru_outView'), 'CSS 缺 .__ru_outView');
+    assert.ok(css.includes('.__ru_hover'), 'CSS 缺 .__ru_hover');
+    assert.ok(css.includes('.__ru_pinBtn'), 'CSS 缺 .__ru_pinBtn');
+    for (const key of ['output', 'outputEmpty', 'outputHint', 'pin', 'unpin']) {
+      assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
+      assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
+    }
+  });
+
+  await check('弹层按「条上方实际可用高度」封顶（新会话输入框居中时顶部不被裁掉）', () => {
+    assert.equal(typeof x.popupSpaceFor, 'function', 'popupSpaceFor 不在 internals 上');
+    assert.equal(x.POPUP_OFFSET, 8, 'JS 里的缝与 CSS 锚点的 8px 不是同一个数');
+    assert.equal(x.POPUP_SPACE_VAR, '--ru-pop-space');
+
+    // 600 - 8（缝）- 12（顶部留白）= 580
+    assert.equal(x.popupSpaceFor(600), 580);
+    // 最近的裁切祖先（宿主滚动容器）顶边在 76px 处：还要再扣掉 header 那一段
+    assert.equal(x.popupSpaceFor(600, 76), 504);
+    // 条已经贴到上沿 / 跑到视口外：给 0，不能给负数（负的 max-height 会被当成没设上限）
+    assert.equal(x.popupSpaceFor(96, 76), 0);
+    assert.equal(x.popupSpaceFor(20), 0);
+    // 裁切祖先在视口外（整页滚动）时按视口上沿算
+    assert.equal(x.popupSpaceFor(600, -40), 580);
+
+    const css = String(x.CSS ?? '');
+    assert.ok(css.includes('bottom:calc(100% + 8px)'), '弹层锚点的缝与 POPUP_OFFSET 不一致');
+    assert.ok(css.includes(`var(${x.POPUP_SPACE_VAR},100vh)`), 'CSS 没有引用可用高度变量');
+
+    const ruleOf = (selector) => {
+      const start = css.indexOf(selector);
+      assert.ok(start >= 0, `CSS 缺 ${selector}`);
+      const end = css.indexOf('}', start);
+      assert.ok(end > start, `CSS 里 ${selector} 没有闭合`);
+      return css.slice(start, end + 1);
+    };
+    for (const selector of ['.__ru_pop{', '.__ru_pop.__ru_popTall{', '.__ru_hover{', '.__ru_menu{']) {
+      assert.match(
+        ruleOf(selector),
+        /max-height:[^;}]*var\(--ru-pop-space/u,
+        `${selector} 没有按条上方的可用高度封顶（新会话里会被裁掉顶部）`,
+      );
+    }
+
+    // 变量必须真的写进去：CSS 里声明了 var() 但没人赋值，就会一直走 100vh 的兜底。
+    const bundle = readFileSync(bundlePath, 'utf8');
+    assert.match(bundle, /setProperty\(POPUP_SPACE_VAR/u, '没有把量到的可用高度写进 CSS 变量');
+  });
+
+  await check('条永远在：没有按钮/没有清单时也保留条与 + 入口', () => {
+    const css = String(x.CSS ?? '');
+    assert.ok(css.includes('.__ru_emptyNote'), 'CSS 缺 .__ru_emptyNote（条要留住，中间给说明）');
+    for (const key of ['allHiddenNote', 'noEntriesNote', 'noProjectNote', 'noManifestNote', 'restoreAll']) {
+      assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
+      assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
+    }
+  });
+
+  await check('「+」面板：字段控件、检测候选与分段结构都在包里（文案中英各一份）', () => {
+    const css = String(x.CSS ?? '');
+    for (const cls of ['__ru_advanced', '__ru_chip', '__ru_moreToggle', '__ru_textarea', '__ru_field', '__ru_panel']) {
+      assert.ok(css.includes(`.${cls}`), `CSS 缺 .${cls}`);
+    }
+    for (const key of [
+      'fieldName', 'fieldCommand', 'fieldCwd', 'fieldEnv', 'fieldId', 'fieldGroup',
+      'fieldBackground', 'fieldReady', 'fieldOpenUrl', 'fieldUrlPattern', 'fieldUriFormat',
+      'fieldReveal', 'fieldOnReady', 'fieldIcon', 'fieldButtonGroup',
+      'detectTitle', 'detectHint', 'detectLoading', 'detectEmpty', 'detectExists', 'detectTemplates',
+      'moreShow', 'moreHide', 'copyTitle', 'copyPlaceholder', 'commandSplitHint', 'createdNote',
+    ]) {
+      assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
+      assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
+    }
+  });
+
+  await check('「+」面板能渲染：基础两栏 / 探测区块 / 展开后的字段都不抛错', () => {
+    /** 把假 React 的 JSX 对象树摊平成"类名集合 + 文本数组"。 */
+    const collect = (tree) => {
+      const classes = new Set();
+      const texts = [];
+      const walk = (node) => {
+        if (node === null || node === undefined) return;
+        if (typeof node === 'string') {
+          texts.push(node);
+          return;
+        }
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (typeof node !== 'object') return;
+        const nodeProps = node.props;
+        const cls = nodeProps === null || nodeProps === undefined ? undefined : nodeProps.className;
+        if (typeof cls === 'string') {
+          for (const name of cls.split(/\s+/u)) classes.add(name);
+        }
+        walk(node.children);
+      };
+      walk(tree);
+      return { classes, texts };
+    };
+
+    /** 面板真正用到的 props（其余字段它不读）。 */
+    const harness = (plugin) => {
+      const internals = plugin.exported.internals;
+      return {
+        internals,
+        props: {
+          entries: [],
+          runtime: { t: (key) => internals.ZH[key] ?? key, locale: 'zh' },
+          projectRoot: 'D:/p',
+          onClosePanel: () => {},
+          onCreateTask: async () => ({ ok: true, entry: 'x' }),
+        },
+      };
+    };
+
+    // 收起态：基础两栏 + 探测区块 + 「展开更多设置」
+    const closed = harness(loadPlugin());
+    const collapsed = collect(closed.internals.AddPanel(closed.props));
+    for (const cls of ['__ru_field', '__ru_fieldLabel', '__ru_panel', '__ru_moreToggle']) {
+      assert.ok(collapsed.classes.has(cls), `收起态缺 ${cls}`);
+    }
+    assert.equal(collapsed.classes.has('__ru_advanced'), false, '收起态不该画更多设置');
+    assert.ok(collapsed.texts.includes(closed.internals.ZH.fieldName), '缺名称那一栏');
+    assert.ok(collapsed.texts.includes(closed.internals.ZH.fieldCommand), '缺命令行那一栏');
+
+    // 展开态：那些"以前只能手改文件"的字段必须真的出现在渲染树里
+    const opened = harness(loadPlugin({ truthyState: true }));
+    const expanded = collect(opened.internals.AddPanel(opened.props));
+    for (const cls of ['__ru_advanced', '__ru_textarea', '__ru_select', '__ru_check']) {
+      assert.ok(expanded.classes.has(cls), `展开态缺 ${cls}`);
+    }
+    for (const key of ['fieldCwd', 'fieldEnv', 'fieldReady', 'fieldOpenUrl', 'fieldOnReady', 'fieldIcon']) {
+      assert.ok(
+        expanded.texts.includes(opened.internals.ZH[key]),
+        `展开态缺字段 ${key}（文案在字典里不等于字段画出来了）`,
+      );
+    }
+  });  await check('parseEnvLines：KEY=value 每行一条，坏行把原文指出来', () => {
+    const ok = x.parseEnvLines('A=1\n# 注释\n\nB = two words ');
+    assert.equal(ok.error, undefined);
+    assert.deepEqual(ok.env, { A: '1', B: 'two words' });
+    // 空值也是合法的一条（清空变量很有用）
+    assert.deepEqual(x.parseEnvLines('EMPTY=').env, { EMPTY: '' });
+    // 坏行：不给"第几行"，给原文（文本框会折行，数行数容易数错）
+    assert.equal(x.parseEnvLines('A=1\nnope\nB=2').error, 'nope');
+    assert.equal(x.parseEnvLines('=1').error, '=1');
+  });
+
+  await check('quoteArgument：复制已有条目时含空格的参数补引号', () => {
+    assert.equal(x.quoteArgument('dev'), 'dev');
+    assert.equal(x.quoteArgument('a b'), '"a b"');
+    assert.equal(x.quoteArgument('say "hi"'), '"say \\"hi\\""');
+  });
+  await check('ansiSpans：颜色转样式片段；光标/擦除序列不留字形；颜色跨行延续', () => {
+    const parts = x.ansiSpans([
+      '\u001B[32m✓ ready\u001B[0m Plain',
+      '\u001B[2K\u001B[1;34mhttp://x/\u001B[0m',
+    ]);
+    // 两行 → 片段序列里必须**有一个换行片段**（第 3 个）
+    assert.equal(parts.length, 4, JSON.stringify(parts));
+    assert.equal(parts[0].text, '✓ ready');
+    assert.equal(parts[0].fg, '#98c379');
+    assert.equal(parts[1].text, ' Plain');
+    assert.equal(parts[1].fg, undefined, 'ESC[0m 重置后要回到字色');
+    assert.equal(parts[2].text, '\n', '行与行之间必须有换行，否则整段输出会挤成一行');
+    assert.equal(parts[2].fg, undefined, '换行片段不带颜色');
+    assert.equal(parts[3].bold, true, '1;34m → 粗体+蓝');
+    assert.equal(parts[3].fg, '#61afef');
+    assert.ok(!JSON.stringify(parts).includes('2K'), '擦除序列不该变成可见字形');
+    // 跨行延续：上一行没重置，下一行还是红的
+    const carry = x.ansiSpans(['\u001B[31mRed', ' still red\u001B[0m']);
+    assert.equal(carry.length, 3);
+    assert.equal(carry[0].fg, '#e06c75');
+    assert.equal(carry[2].fg, '#e06c75');
+    // 空行也要保住（脚本用它分节/对齐，丢掉它同样是"换行没了"）
+    const blank = x.ansiSpans(['a', '', 'b']);
+    assert.equal(blank.map((part) => part.text).join(''), 'a\n\nb');
+    // 总不变量：片段拼起来的文本 === 行用 \n 拼起来的文本（悬浮卡就靠这个换行）；
+    // 颜色码本身要被剥掉，所以拿"剥完色的期望值"比。
+    const lines = ['one', '\u001B[32mtwo\u001B[0m', '', '   indented  three'];
+    assert.equal(
+      x.ansiSpans(lines).map((part) => part.text).join(''),
+      'one\ntwo\n\n   indented  three',
+    );
   });
 
   /* ── 层叠护栏：弹层必须压得过宿主「回到底部」圆钮 ──

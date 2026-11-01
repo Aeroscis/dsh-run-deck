@@ -33,7 +33,15 @@ export interface TaskOptions {
   env?: Record<string, string>;
 }
 
-/** VS Code `presentation` 的 panel / reveal / clear。 */
+/**
+ * VS Code `presentation` 的 panel / reveal / clear。
+ *
+ * 对本插件来说 `reveal: 'always'` 是**唯一活着的字段**：这条命令跑起来时，界面
+ * 把它的输出悬浮卡自动钉住（悬停预览的那张小卡；拔钉恢复"悬停才出现"）。
+ * `panel` / `clear` 描述的是
+ * VS Code 家的终端标签，本插件没有对应物：面板本来就"每条 run 独立、开跑即新"
+ * （已等价 dedicated + clear），收下字段但不告警。
+ */
 export interface TaskPresentation {
   panel?: 'shared' | 'dedicated' | 'new';
   reveal?: 'always' | 'silent' | 'never';
@@ -135,6 +143,79 @@ export interface ResolvedEntry {
   presentation?: TaskPresentation;
   group: TaskGroup;
   onReady?: string;
+  /**
+   * 清单里**原样**的那一条（变量未展开、cwd 未解析成绝对路径）。
+   *
+   * 存在的理由只有一个：`+` 面板的「从已有条目复制」。复制必须拿原样字段，
+   * 否则 `${workspaceFolder}` 会被展开成当时那台机器的绝对路径、
+   * `cwd` 也会从相对路径变成绝对路径，复制出来的条目换台机器就坏了。
+   */
+  raw?: TaskEntry;
+}
+
+/**
+ * 「+」面板提交的一条新启动项。
+ *
+ * 这些字段就是 `TaskEntry` 里**界面可以填**的那一组（`label` / `command` 必填）。
+ * 它被 host 收敛成 `TaskEntry` 之后才写进 `.dsh/run.json`——写入的仍然是清单里
+ * 的字面量，界面不新增任何执行能力。
+ */
+export interface NewTaskInput {
+  /** 人读的标题，必填。 */
+  label: string;
+  /**
+   * 一行命令（例如 `npm run dev`）。
+   *
+   * 界面只让人填一条命令行，host 用 `splitCommandLine` 拆成 `command` + `args`：
+   * 整行塞进 `command` 会被拼成 `"npm run dev"`，交给 shell 就变成"找一个名叫
+   * `npm run dev` 的可执行文件"（见 manifest-edit.ts 的说明）。
+   */
+  command: string;
+  /** 工作目录；可含 `${workspaceFolder}`。留空 = 项目根目录。 */
+  cwd?: string;
+  /** 额外环境变量（值里可含变量）。 */
+  env?: Record<string, string>;
+  /** 长驻：跑完不退出。 */
+  isBackground?: boolean;
+  /** 分组标记（只影响展示与 `group` 字段）。 */
+  group?: TaskGroup;
+  /** 显式 id（留空由 label 派生）。 */
+  id?: string;
+  /** 就绪正则 → `problemMatcher.background.endsPattern`。 */
+  readyPattern?: string;
+  /** 就绪后打开地址 → `serverReadyAction`。 */
+  openUrl?: boolean;
+  /** `serverReadyAction.pattern`；留空 = 用 `readyPattern`。 */
+  urlPattern?: string;
+  /** `serverReadyAction.uriFormat`（`%s` 是抓到的地址）。 */
+  uriFormat?: string;
+  /** `presentation.reveal`：`always` = 跑起来时自动钉住输出卡。 */
+  reveal?: 'always' | 'silent' | 'never';
+  /** 就绪后接力另一条 entry 的 id（只接受 id，不接受命令）。 */
+  onReady?: string;
+}
+
+/** 「+」面板里"从项目里检测出来的一条候选"。 */
+export interface DetectedTask {
+  /** 稳定键（去重与 React key 用），例如 `package.json:dev`。 */
+  key: string;
+  source: 'package.json' | 'template';
+  label: string;
+  command: string;
+  /** 这条为什么被推荐（写明来源，别让人猜）。 */
+  hint?: string;
+  /** 清单里已经有同样命令的条目 → 界面标「已在清单」，避免加出重复项。 */
+  exists: boolean;
+  /** 预填到表单里的字段（用户在表单里还能改）。 */
+  preset: Omit<NewTaskInput, 'label' | 'command'>;
+}
+
+/** `POST /detect` 除了 `ok: true` 之外的载荷。 */
+export interface TaskDetection {
+  /** 这个项目用哪个包管理器跑脚本（npm / pnpm / yarn / bun）；没有 package.json 时为 undefined。 */
+  packageManager?: string;
+  candidates: DetectedTask[];
+  warnings: string[];
 }
 
 /** 一个项目根目录（.dsh/run.json 所在处）及其清单。 */
@@ -193,6 +274,12 @@ export interface RunRecord {
    * 唯一说得清原因的就是它自己的输出；面板把这几行摆出来，"点了没反应"就不用猜。
    */
   tail?: string[];
+  /**
+   * 同一段输出的**原始行**（ANSI 颜色码原样保留）——输出悬浮卡用它画彩色控制台。
+   * 与 `tail` 同一条线（最近几行、剥尾空白）；`tail` 是它剥过色的纯文本版，
+   * ⚙ 面板 / 就绪判定 / 模型工具继续认 `tail`。
+   */
+  rawTail?: string[];
   /**
    * 这条 run 就绪后**接力**起的下一条 entry（manifest 里的 `onReady`）。
    *

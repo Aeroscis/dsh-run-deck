@@ -79,13 +79,19 @@ export async function writeLayout(file: string, layout: LocalLayout): Promise<vo
 /**
  * 合并 run.json 的 buttons[] 与本地覆盖。
  *
- * 规则：**本地覆盖只影响展示，不创造新的执行能力**。
- * 一个 entry 无论本地怎么覆盖，它对应的命令永远来自 run.json 的那一条；
- * 因此 `pinned: false` 只是"我不看它"，不是一个新的东西。
+ * 规则：**本地覆盖只影响展示，不创造新的执行能力**。一个 entry 无论本地怎么覆盖，
+ * 它对应的命令永远来自 run.json 的那一条 task。因此：
+ *   - `pinned: false` 只是"我不看它"——把声明过的按钮从浮动层收起；
+ *   - `pinned: true` 允许把 **run.json 里已有、但没进 buttons[]** 的条目添加上条
+ *     （`+` 面板的"钉到按钮条"）：按钮确实"新出现"，但它执行的仍是清单里那条
+ *     task，不是本地发明的第二条通路。`entries` 给出全部可用条目（tasks[] 的
+ *     id），没有覆盖出 `pinned: true` 的一律不上条。
  */
 export function effectiveButtons(
   declared: Array<{ entry: string; icon?: string; group?: string; label?: string; order?: number }>,
   layout: LocalLayout,
+  /** 全部可用条目（run.json tasks[] 的 id）；给了它，覆盖里的 `pinned: true` 才能添加按钮。 */
+  entries: Array<{ entry: string }> = [],
 ): Array<{ entry: string; icon: string; group: string; label?: string; order: number }> {
   const out: Array<{ entry: string; icon: string; group: string; label?: string; order: number }> =
     [];
@@ -100,5 +106,21 @@ export function effectiveButtons(
       order: override.order ?? button.order ?? 100,
     });
   }
+  // 本地钉上来的（buttons[] 没声明的）：展示字段照样吃覆盖；没给 order 就垫到末尾
+  // （1000 + 任务序号），不和声明过的 order（通常是小数字）抢前排。之后拖一下
+  // 排序就会写入显式 order，与声明过的按钮混排。
+  const declaredIds = new Set(declared.map((button) => button.entry));
+  entries.forEach(({ entry }, index) => {
+    if (declaredIds.has(entry)) return;
+    const override = layout.buttons[entry];
+    if (override?.pinned !== true) return;
+    out.push({
+      entry,
+      icon: override.icon ?? 'play',
+      group: override.group ?? 'default',
+      ...(override.label !== undefined ? { label: override.label } : {}),
+      order: override.order ?? 1000 + index,
+    });
+  });
   return out.sort((left, right) => left.order - right.order);
 }

@@ -20,7 +20,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { renderCommandLine } from './exec.js';
 import type { RundeckManager } from './manager.js';
-import { ERROR_CODES, type ApiError, type ApiResult, type ButtonOverride } from './types.js';
+import {
+  ERROR_CODES,
+  type ApiError,
+  type ApiResult,
+  type ButtonOverride,
+  type NewTaskInput,
+} from './types.js';
 
 /** 路由前缀。 */
 export const API_PREFIX = '/dsh-rundeck/api';
@@ -76,8 +82,44 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-function asBoolean(value: unknown): boolean {
-  return value === true;
+/**
+ * 把 `/task` 的请求体收成 `NewTaskInput`。
+ *
+ * 只挑**已知字段**，值类型不对就当作没给（校验在 `newtask.ts` 里统一做，
+ * 这里不重复判断，也不让多余字段混进去）。注意这里仍然没有任何"自由命令"字段：
+ * 写进清单的 `command` 由 `splitCommandLine` 拆一条人填的命令行得到。
+ */
+function newTaskInputFromBody(body: Record<string, unknown>): NewTaskInput {
+  const envRaw = body['env'];
+  const env: Record<string, string> = {};
+  if (envRaw !== null && typeof envRaw === 'object' && !Array.isArray(envRaw)) {
+    for (const [key, value] of Object.entries(envRaw as Record<string, unknown>)) {
+      if (typeof value === 'string') env[key] = value;
+    }
+  }
+  const group = body['group'];
+  const reveal = body['reveal'];
+  const cwd = asString(body['cwd']).trim();
+  const id = asString(body['id']).trim();
+  const readyPattern = asString(body['readyPattern']).trim();
+  const urlPattern = asString(body['urlPattern']).trim();
+  const uriFormat = asString(body['uriFormat']).trim();
+  const onReady = asString(body['onReady']).trim();
+  return {
+    label: asString(body['label']),
+    command: asString(body['command']),
+    ...(cwd.length > 0 ? { cwd } : {}),
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+    ...(body['isBackground'] === true ? { isBackground: true } : {}),
+    ...(group === 'build' || group === 'test' || group === 'none' ? { group } : {}),
+    ...(id.length > 0 ? { id } : {}),
+    ...(readyPattern.length > 0 ? { readyPattern } : {}),
+    ...(body['openUrl'] === true ? { openUrl: true } : {}),
+    ...(urlPattern.length > 0 ? { urlPattern } : {}),
+    ...(uriFormat.length > 0 ? { uriFormat } : {}),
+    ...(reveal === 'always' || reveal === 'silent' || reveal === 'never' ? { reveal } : {}),
+    ...(onReady.length > 0 ? { onReady } : {}),
+  };
 }
 
 /** 判断 Host 是否是 loopback authority。 */
@@ -226,9 +268,11 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
 
     // 全量状态。`?cwd=` / `?sessionId=` 决定焦点项目；
     // 两者都没有 = 没有焦点项目（浮动层整条隐藏）。
-    route(`${API_PREFIX}/state`, 'GET', async (_body, req) =>
-      manager.state((await focusTargetFromQuery(req)) ?? undefined),
-    ),
+    // 先对一次 `layout.json` 的 mtime：手改（或别的进程改）最迟在这一轮生效。
+    route(`${API_PREFIX}/state`, 'GET', async (_body, req) => {
+      await manager.syncLayoutFromDisk();
+      return manager.state((await focusTargetFromQuery(req)) ?? undefined);
+    }),
 
     // 重读磁盘上的清单（改了 .dsh/run.json 之后不必重启 DSH）。
     route(`${API_PREFIX}/refresh`, 'POST', async () => {
@@ -305,7 +349,11 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
         return { ok: false, code: ERROR_CODES.badRequest, message: '缺少 entry id' } satisfies ApiError;
       }
       const override: ButtonOverride = {
-        ...(asBoolean(body.pinned) ? { pinned: asBoolean(body.pinned) } : {}),
+        // ⚠️ 这里必须认 `false`。早先写的是 `...(asBoolean(body.pinned) ? {...} : {})`，
+        // 于是 `pinned: false`（界面上的「从按钮条收起」）和"根本没给这个字段"长得
+        // 一模一样，被整段丢掉——收起成了空操作，用户因此永远看不到能重新钉上来的
+        // 条目，看起来就像"添加按钮这个功能没做"。
+        ...(typeof body.pinned === 'boolean' ? { pinned: body.pinned } : {}),
         ...(typeof body.order === 'number' && Number.isFinite(body.order)
           ? { order: body.order }
           : {}),
@@ -314,6 +362,53 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
         ...(asString(body.icon).length > 0 ? { icon: asString(body.icon) } : {}),
       };
       return manager.setButtonOverride(entry, override);
+    }),
+
+    // 界面新建启动项：**真的写进项目的 .dsh/run.json 的 tasks[]**。
+    //
+    // 这和"本地覆盖不能存命令"并不冲突——两者编辑的不是同一件东西：
+    //   - `layout.json` 回答"我怎么看这个项目"，永远只影响展示；
+    //   - `run.json` 回答"这个项目有哪些启动项"，界面这里写的就是它本身。
+    // 手改和界面改写同一个文件，所以只有一条执行通路，但两条编辑通路都在。
+    route(`${API_PREFIX}/task`, 'POST', async (body) => {
+      const projectRoot = asString(body.projectRoot).trim();
+      if (projectRoot.length === 0) {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: '缺少 projectRoot',
+        } satisfies ApiError;
+      }
+      return manager.createTask(projectRoot, newTaskInputFromBody(body));
+    }),
+
+    // 「+」面板的候选检测：读这个项目的 package.json scripts。
+    // 只读、不落盘、不执行——结果只用来预填表单（"检测"与"创建"是两件事）。
+    route(`${API_PREFIX}/detect`, 'POST', async (body) => {
+      const projectRoot = asString(body.projectRoot).trim();
+      if (projectRoot.length === 0) {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: '缺少 projectRoot',
+        } satisfies ApiError;
+      }
+      return manager.detectTasks(projectRoot);
+    }),
+
+    // 界面删除启动项：真的从项目的 .dsh/run.json 的 tasks[] 里移除（连带 buttons[]）。
+    // 只想从条上收起来的话走 /button 的 `pinned: false`——那条 task 仍然保留。
+    route(`${API_PREFIX}/task/remove`, 'POST', async (body) => {
+      const projectRoot = asString(body.projectRoot).trim();
+      const entryId = asString(body.entryId).trim();
+      if (projectRoot.length === 0 || entryId.length === 0) {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: '需要 projectRoot 与 entryId',
+        } satisfies ApiError;
+      }
+      return manager.deleteTask(projectRoot, entryId);
     }),
 
     // 让一个磁盘上存在但没被扫到的目录成为焦点项目（"任意目录都能用"）。

@@ -261,6 +261,11 @@ export interface TerminalTap {
   take(): string[];
   /** 最近若干行（面板展示用）。 */
   tail(): string[];
+  /**
+   * 最近若干行的**原始版**（ANSI 颜色码原样留着）——输出悬浮卡画彩色控制台靠它；
+   * ⚙ 面板与就绪判定继续只认剥过色的 `tail()`。
+   */
+  rawTail(): string[];
   /** 进程是否已经结算（`done` 落定）。 */
   readonly finished: boolean;
   /** 结算结果（`finished` 之后才有意义）。 */
@@ -275,6 +280,8 @@ export function tapRunTerminal(
 ): TerminalTap {
   const pending: string[] = [];
   const tail: string[] = [];
+  /** 原始行（ANSI 颜色码原样）——输出悬浮卡画彩色控制台用。 */
+  const raw: string[] = [];
   let buffer = '';
   let finished = false;
   let outcome: DshSubprocessOutcome | undefined;
@@ -285,6 +292,10 @@ export function tapRunTerminal(
     pending.push(clean);
     tail.push(clean);
     while (tail.length > maxTail) tail.shift();
+    // 同一步收两条账：tail 是剥过色的纯文本（⚙ 面板/就绪判定用），raw 是原样
+    // （界面画颜色用）。门 仍然按"剥完色还有字"判断——纯颜色码的行没有信息。
+    raw.push(line.replace(/\s+$/u, ''));
+    while (raw.length > maxTail) raw.shift();
   };
 
   const consume = (chunk: string): void => {
@@ -332,6 +343,9 @@ export function tapRunTerminal(
     },
     tail() {
       return [...tail];
+    },
+    rawTail() {
+      return [...raw];
     },
     get finished() {
       return finished;
