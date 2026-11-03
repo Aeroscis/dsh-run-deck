@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — `prepare` 钩子。
+ * dsh-run-deck — `prepare` 钩子。
  *
  * pnpm 在 `file:` / git 形式的依赖上会跑 prepare；registry tarball 不会。
  * 插件包自带 `lib/` 与 `client/` 构建产物，所以**没有 typescript 的机器上装包也必须成功**：
@@ -24,7 +24,7 @@ function tscBin() {
 
 const bin = tscBin();
 if (bin === undefined) {
-  console.log('[dsh-rundeck] prepare: 未安装 typescript，跳过构建（仓库已自带 lib/ 与 client/，可直接安装运行）。');
+  console.log('[dsh-run-deck] prepare: 未安装 typescript，跳过构建（仓库已自带 lib/ 与 client/，可直接安装运行）。');
   process.exit(0);
 }
 

@@ -1,7 +1,7 @@
-# dsh-rundeck — DSH Run Configuration
+# dsh-run-deck — DSH Run Configuration
 
 给 DeepSeek Harness 增加一条**贴着输入框上沿的浮动按钮条**：
-按**当前工作区** `.dsh/run.json` 里声明的条目一键跑 / 停。
+按**当前工作区** `.dsh/run-deck/run.json` 里声明的条目一键跑 / 停。
 
 - **词汇表照抄 VS Code tasks.json**，不发明新概念。字段名、语义、默认值全部来自
   [tasks-appendix](https://code.visualstudio.com/docs/reference/tasks-appendix) 与
@@ -18,13 +18,13 @@
 
 ```powershell
 # 默认 profile
-dsh plugin add @aeroscis/dsh-rundeck
+dsh plugin add @aeroscis/dsh-run-deck
 
 # 指定 profile
-dsh plugin --profile <profile> add @aeroscis/dsh-rundeck
+dsh plugin --profile <profile> add @aeroscis/dsh-run-deck
 
 # 从本地源码目录安装（尚未发布到 registry 时，边改边试）
-dsh plugin --profile <profile> add D:/Flora/ProgramProjects/dsh-rundeck
+dsh plugin --profile <profile> add D:/Flora/ProgramProjects/dsh-run-deck
 ```
 
 然后**重启 DSH**。输入框上沿会出现一条按钮条（见 §7）。
@@ -36,12 +36,12 @@ desktop 是 Electron 保留名，npm CLI 会拒绝针对它的插件管理请求
 要么手动装（等价于 `dsh plugin add` 做什么）：
 
 1. `~/.dsh/profiles/desktop/package.json` 的 `dependencies` 加一条
-   `"@aeroscis/dsh-rundeck": "link:D:/Flora/ProgramProjects/dsh-rundeck"`
-2. `dsh.profile.bundles` 数组里加 `"@aeroscis/dsh-rundeck"`
+   `"@aeroscis/dsh-run-deck": "link:D:/Flora/ProgramProjects/dsh-run-deck"`
+2. `dsh.profile.bundles` 数组里加 `"@aeroscis/dsh-run-deck"`
 3. `dsh.desktopDeselectedBundles` 里**不要**出现它（那是应用里手动停用的清单）
 4. 在该目录跑 `pnpm install`（会建一个 junction 指向源码目录）
 5. `dsh --profile desktop --dump-config` 确认输出里有
-   `- id: dsh-rundeck  name: '@aeroscis/dsh-rundeck'`，然后重启应用
+   `- id: dsh-run-deck  name: '@aeroscis/dsh-run-deck'`，然后重启应用
 
 自检脚本：`node _probe/run/installcheck.mjs`（逐项核对上面 5 步）。
 
@@ -118,13 +118,13 @@ DSH 自己的终端面板（`@deepseek-ai/dsh-api-terminal-controller`）用的�
 | 入口 | sessionId 从哪来 | 用途 |
 | --- | --- | --- |
 | 浮动层按钮 | 客户端把**当前会话 id** 一起报上来 | 记进 `RunRecord.ownerSessionId` + 子进程的 `DSH_SESSION_ID` |
-| `/rundeck run <id>` | 调用这条命令的 `invocation.agent` | 同上 |
-| `rundeck` 工具（模型侧） | 调用工具的 `exec.agent` | 同上 |
+| `/run-deck run <id>` | 调用这条命令的 `invocation.agent` | 同上 |
+| `run-deck` 工具（模型侧） | 调用工具的 `exec.agent` | 同上 |
 
 **sessionId 现在可以缺省**（缺了照样跑，只是没有那两条记录）——空闲会话、甚至
 没有任何 Agent 的场景都能点按钮，这正是"点了没反应"的另一半原因。
 
-两条硬约束没有变：**命令只有一个来源**（`.dsh/run.json` 里的字面量；接口只接受
+两条硬约束没有变：**命令只有一个来源**（`.dsh/run-deck/run.json` 里的字面量；接口只接受
 `{projectRoot, entryId}` 指针 + 发起会话 id，绝不接受自由命令、也不扫目录找可执行文件）；
 **进程归宿主管**——PTY 句柄登记在 `subprocess` 服务里，插件卸载 / 宿主退出时它自己
 终止整棵进程树，不是 DSH 外面的一条无人监管通路。
@@ -156,7 +156,7 @@ shell 执行完就退，所以 `handle.done` 结算 = 这条任务结束，退�
 （`openReadyUrl()`）：`window.open(url, '_blank', 'noopener,noreferrer')` —— 桌面壳的
 `setWindowOpenHandler` 会接住它（`electron-runtime` 实测 `shell.openExternal(target.href)`），
 也就是**系统默认浏览器**；Web 版就是新开一个标签页。每个 `runId|url` 只开一次，
-去重键存在浏览器本地（`dsh-rundeck.openedUrls.v1`），否则每次刷新页面都会再弹一次。
+去重键存在浏览器本地（`dsh-run-deck.openedUrls.v1`），否则每次刷新页面都会再弹一次。
 
 > 顺带一个日志坑（踩过）：宿主日志会把"看起来像 URL 的整段"做规范化，
 > `http://x/（说明）` 这种**挨着写**的会被整段 percent-encode 成 `http://x/%EF%BC%88…%EF%BC%89`，
@@ -188,7 +188,7 @@ shell 执行完就退，所以 `handle.done` 结算 = 这条任务结束，退�
 
 ## 4. 落点
 
-- **项目里**：`.dsh/run.json`（**不是** `.vscode/`）。借词汇表但不冒充 VS Code 能读它——
+- **项目里**：`.dsh/run-deck/run.json`（**不是** `.vscode/`）。借词汇表但不冒充 VS Code 能读它——
   两边的 `type` 支持集不同，混在一起只会让人困惑。
 - **插件里**：另存一份**机器本地的个人覆盖**（按钮布局、分组、图标、显隐），
   在 `<pluginDataDir>/layout.json`，**不进仓库**。
@@ -241,7 +241,7 @@ host half spawn 的进程**绕过 agent 的 pwsh 沙箱**，所以：
    `sec-fetch-site: cross-site` 一律拒绝、带 Origin 的必须与 Host 同源、
    变更类接口只 POST。
 
-`/rundeck` 命令同样只接受 id，不接受自由命令。
+`/run-deck` 命令同样只接受 id，不接受自由命令。
 
 ---
 
@@ -272,7 +272,7 @@ host half spawn 的进程**绕过 agent 的 pwsh 沙箱**，所以：
 
 | 要点 | 行为 |
 | --- | --- |
-| **同列对齐** | 注册进 `conversation.input.dock`（会话级 list，`id: dsh-rundeck-bar`，**order 15**）。宿主 `ank0OG_composerStack` 是 `flex column; gap:6px`，按 order 排出 `todo(0) → goal(10) → 本插件(15) → queue(20) → 输入框卡片`。尺寸**逐字照抄**「任务列表」那一条（`IJkQnq_root`）：`width: 100% - 2×side-clearance - 4×dock-inset`、`max-width: card-max-width - 4×dock-inset`、`flex:none; margin:0 auto` → 与任务列表**同宽同左边缘**（实测都是 `left 636 / width 920`），比输入框卡片（`left 620 / width 952`）两边各窄 16px。**位置与宽度全由宿主排版，条本身不做任何 DOM 测量** |
+| **同列对齐** | 注册进 `conversation.input.dock`（会话级 list，`id: dsh-run-deck-bar`，**order 15**）。宿主 `ank0OG_composerStack` 是 `flex column; gap:6px`，按 order 排出 `todo(0) → goal(10) → 本插件(15) → queue(20) → 输入框卡片`。尺寸**逐字照抄**「任务列表」那一条（`IJkQnq_root`）：`width: 100% - 2×side-clearance - 4×dock-inset`、`max-width: card-max-width - 4×dock-inset`、`flex:none; margin:0 auto` → 与任务列表**同宽同左边缘**（实测都是 `left 636 / width 920`），比输入框卡片（`left 620 / width 952`）两边各窄 16px。**位置与宽度全由宿主排版，条本身不做任何 DOM 测量** |
 | **为什么是 15** | 这一列里**队列那一行是"贴在输入框上"的**：它自带 `margin:0 auto calc(0px - gap - 3px)`（负底边距，吃掉行距再往卡片上沿压 3px）、圆角只有上面两个（`radius-lg radius-lg 0 0`），宿主明确把它当作卡片的一部分——所以它必须是紧邻卡片的那一行，别的行不能插到它与卡片之间。我们自己是一组"针对输入框的动作"（这个工作区能跑什么），性质最接近队列 → 紧挨着它排在这一列下半段；任务列表/目标是"智能体在做什么"的状态读出 → 排在更上面 |
 | **行距一致** | 组内与"组 vs 卡片"都只吃宿主那条 6px 堆叠间距，**不自己加 margin**。实测最满状态（四行同时在）：`任务 755..791 → 条 797..831 → 目标 837..873 → 队列 879..919 → 卡片 916..1044`，全是 6px。之前的写法给自己的行加了 6px `margin-bottom`，于是"组内 6px / 组与卡片 12px"不一致——那是我加的，不是宿主的结构 |
 | **面板面** | 条的底色用宿主给这一列的那套：`--dsw-specific-menu`（半透明面）+ `backdrop-filter: --dsw-menu-backdrop-filter`（磨砂）+ `--dsw-elevation-panel`（阴影，描边走 `--dsw-elevation-stroke-color: --dsw-alias-border-l1`）+ 圆角 `--dsw-radius-lg`，与「任务列表」同一视觉语言。**不能**用 `--dsw-alias-button-floating-fill`：实测它和卡片底色 `--dsw-specific-input-major` 都是 `#2c2c2e`（同色），贴着看就是一个盒子；`--dsw-specific-menu` 是 `#43454a73` |
@@ -312,7 +312,7 @@ host half spawn 的进程**绕过 agent 的 pwsh 沙箱**，所以：
   也支持 `Alt+↑` / `Alt+↓`），右侧是两件事：
   - **「钉到按钮条 / 从按钮条收起」**：只改这条按钮在不在条上（写本地 `layout.json`），
     条目本身保留；
-  - **「删除」**：真的把这条任务从项目的 `.dsh/run.json` 的 `tasks[]` 里移除（连带清掉
+  - **「删除」**：真的把这条任务从项目的 `.dsh/run-deck/run.json` 的 `tasks[]` 里移除（连带清掉
     `buttons[]` 里指向它的声明），需要再点一次「确认删除」。
   **排序和删除都在这里**。顺序写进机器本地的 `layout.json`，覆盖 run.json 的 `order`，
   你拖完只影响你自己。
@@ -335,9 +335,9 @@ host half spawn 的进程**绕过 agent 的 pwsh 沙箱**，所以：
   - **落盘前逐项校验**：坏正则、不存在的工作目录、非法环境变量名、撞车的 `id`、
     指向不存在条目的 `onReady`、说了要开地址却没给 URL 正则……一律**拒绝写入**并把
     原因显示在面板里（`src/newtask.ts` 的 `buildTaskEntry`）。
-  - 通过校验后 host 把它**真的写进这个项目的 `.dsh/run.json` 的 `tasks[]`**（用保留
+  - 通过校验后 host 把它**真的写进这个项目的 `.dsh/run-deck/run.json` 的 `tasks[]`**（用保留
     注释的最小文本插入，手写的注释和排版不会被重排），随后自动钉到条上；**目录里还
-    没有 `.dsh/run.json` 时会连清单一起创建**。多字段条目写成"一字段一行"（一行会横到
+    没有 `.dsh/run-deck/run.json` 时会连清单一起创建**。多字段条目写成"一字段一行"（一行会横到
     屏幕外），只有 `label/id/command/args` 的简版仍是一行。
   > 为什么 UI 能写 run.json、本地 `layout.json` 却永远不存命令：前者编辑的是**项目和
   > 别人共享的同一个源文件**（手改和界面写完全等价，`git diff` 看得见），后者只是
@@ -426,10 +426,10 @@ host half spawn 的进程**绕过 agent 的 pwsh 沙箱**，所以：
 
 ```
 宿主把当前会话 id 交给插槽 → 注册项的 inject(sessionId)
-      ↓  GET /dsh-rundeck/api/state?sessionId=…
+      ↓  GET /dsh-run-deck/api/state?sessionId=…
 host 解析 cwd：ctx.sessions.get(id).header.cwd
             →（内存里没有这条会话时）sessionController.list/inspect 的会话目录
-      ↓  现读这个目录的 .dsh/run.json
+      ↓  现读这个目录的 .dsh/run-deck/run.json
 浮动条整组换成这个工作区的按钮
 ```
 
@@ -443,7 +443,7 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
 浏览器侧的 `sessions` 服务**没有** `get(id)` / `list()`（只有
 `retain/using/retainInfo/refreshProjections/search/fork/scope/binding`），
 所以 cwd 只能在 host 半边解析。host 侧按**可靠性**排了三级
-（`RundeckManager.sessionCwdAsync`）：
+（`RunDeckManager.sessionCwdAsync`）：
 
 | 顺序 | 来源 | 何时命中 | 代价 |
 | --- | --- | --- | --- |
@@ -464,18 +464,18 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
 `sessions.list()` 可能都还是空的，插件自己那行日志会写"0 个项目根目录"——
 这不影响浮动条）。
 
-**改了 `.dsh/run.json` 会在下一轮 `/state`（≤2.5 秒）自动生效**：已经加载过的项目
+**改了 `.dsh/run-deck/run.json` 会在下一轮 `/state`（≤2.5 秒）自动生效**：已经加载过的项目
 每次都会比一下清单的 `mtime`（`loadFocusedProject` → `manifestChanged`），变了就现读
 一遍并留一行 `清单变了，已重读：…（N 条）`。不需要重启 DSH，也不需要知道
-`/rundeck list` 会顺手重读——实测"改完清单发现界面还是旧的"是很容易让人以为
+`/run-deck list` 会顺手重读——实测"改完清单发现界面还是旧的"是很容易让人以为
 "插件没生效"的坑。清单被删掉/写坏时也一样会重读，结果是条隐藏 + 面板里出现告警，
 而不是留着上一次的按钮。
 
-切换到没有 `.dsh/run.json` 的目录时**整条隐藏**（不是显示空条）。
+切换到没有 `.dsh/run-deck/run.json` 的目录时**整条隐藏**（不是显示空条）。
 `/api/focus` 还能让**任意目录**成为焦点——不要求它先在 DSH 里注册成工作区。
 
 按钮点一下 = 跑；这一条正在跑时再点 = 停（`/api/run` 与 `/api/stop`）。
-**它不新增任何执行能力**——与 `/rundeck run` 是同一条路径。
+**它不新增任何执行能力**——与 `/run-deck run` 是同一条路径。
 
 ### 排障：怎么确认"客户端半边到底加载了没有"
 
@@ -485,7 +485,7 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
 | --- | --- |
 | `服务可用性：workspaceRegistry=… sessions=… sessionController=… subprocess=…` | 插件启动时必打一行。`MISSING` = **那一刻**这个服务还不在本 fiber 作用域里（后续注册的服务这时当然还没出现，所以它只说明"启动那一刻的快照"，不是"点按钮时也没有"）；真要判断能不能起进程，看点击返回的错误或 `capabilities.subprocess` |
 | `cwd 解析：会话 **** → <目录>（来源：…）` | 每个会话只打一行：焦点项目的 cwd 是从哪解析出来的（内存会话存储 / 会话目录 list / inspect）。解析不出来时会写 `没解析出工作目录（…）→ 浮动条整条隐藏`——"这个仓库为什么没按钮"在日志里就是一句可读的话 |
-| `清单变了，已重读：<路径>（N 条）` | 改了 `.dsh/run.json` 之后自动重读时打一行（按 `mtime` 判断，见 §7）。没有它，"我刚改的 pattern 到底生效了没"就得靠猜 |
+| `清单变了，已重读：<路径>（N 条）` | 改了 `.dsh/run-deck/run.json` 之后自动重读时打一行（按 `mtime` 判断，见 §7）。没有它，"我刚改的 pattern 到底生效了没"就得靠猜 |
 | `onReady 接力：<label>` | manifest 里写了 `onReady` 才会出现：**点一个按钮却跑起来两条**。⚙ 面板里同样会写 `→ <id>（onReady）`，因为这件事很容易被当成故障 |
 | `跑 … → PTY 已开（cmd.exe /d /s /c …）` | 起了一条 run。`pid` 那一段要留意：Windows/ConPTY 上 node-pty 实测给的是 `pid 0`，拿不到真 pid 时**不写 pid**（写个 `pid 0` 只会让人以为进程没起来） |
 | `client ping: client-loaded` | 浏览器**确实执行到** client half 的 `apply()`（包到了页面） |
@@ -498,7 +498,7 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
 三行的读法：没有第 1 行 = host 半边没加载；有 1 无 2 = 包没被浏览器取到；
 有 2 无 3 = 注册成功但插槽没渲染；`state-changed` 里看 `sessionId` / `clientCwd` /
 `reason`：`sessionId:null` = 插槽没把会话 id 交上来；`buttons:0` 且
-`reason:null` = 这个目录没有 `.dsh/run.json`（这是**正常**的隐藏）；三条解析路
+`reason:null` = 这个目录没有 `.dsh/run-deck/run.json`（这是**正常**的隐藏）；三条解析路
 都没拿到 cwd 时 `focused` 会是 `null`——那时看 warnings 里的 `sessionController.*`
 报错。
 
@@ -617,7 +617,7 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
 就说明浏览器**取到过**它（缓存目录见下），不必重启也能确认：
 ```powershell
 $cache = "$env:APPDATA\DSH Desktop\Partitions\dsh-desktop-renderer\Cache\Cache_Data"
-Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-rundeck' -List | Select-Object Path
+Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-run-deck' -List | Select-Object Path
 ```
 
 客户端 bundle 的改动会被 client HMR 自动重取（无需重启）；**host 半边的改动
@@ -628,21 +628,21 @@ Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-rundeck' -List | Select-O
 ## 8. 命令
 
 ```text
-/rundeck list                    列出全部条目（id / 命令 / 目录）+ 进行中的 run
-/rundeck run <id>                跑一个条目（id 用 list 里那个）
-/rundeck stop <runId>            停掉一个 run
-/rundeck rerun <runId>           停掉旧的再开新的
-/rundeck path                    显示各项目的 .dsh/run.json 落点
-/rundeck help                    帮助
+/run-deck list                    列出全部条目（id / 命令 / 目录）+ 进行中的 run
+/run-deck run <id>                跑一个条目（id 用 list 里那个）
+/run-deck stop <runId>            停掉一个 run
+/run-deck rerun <runId>           停掉旧的再开新的
+/run-deck path                    显示各项目的 .dsh/run-deck/run.json 落点
+/run-deck help                    帮助
 ```
 
 - id 里**可以带 `/`**（例如 `jin/web`），所以按完整 id 找，不再切分
 - label 只在唯一时接受；多个匹配会提示改用 id
-- 含空格的标题用引号：`/rundeck run "jin · web"`
+- 含空格的标题用引号：`/run-deck run "jin · web"`
 
 ## 8b. 外部按 id 调用（第 4 步）
 
-模型侧有一个 **`rundeck`** 工具，与面板、命令调**同一个 manager**（不存在两套逻辑）：
+模型侧有一个 **`run-deck`** 工具，与面板、命令调**同一个 manager**（不存在两套逻辑）：
 
 | action | 参数 | 说明 |
 | --- | --- | --- |
@@ -669,12 +669,12 @@ Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-rundeck' -List | Select-O
 
 ## 8c. HTTP 接口
 
-`/dsh-rundeck/api/*`，只接受 loopback authority、`sec-fetch-site: cross-site` 一律拒绝、
+`/dsh-run-deck/api/*`，只接受 loopback authority、`sec-fetch-site: cross-site` 一律拒绝、
 变更类只 POST。**所有接口只接受 id 指针，不接受自由命令**：
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| GET | `/state?sessionId=…`（或 `?cwd=…`） | 全量状态：焦点项目、它的 buttons[]、全部条目、runs、告警、能力。`sessionId` 由 host 解析成 cwd（内存会话存储 → 会话目录，见 §7）；两条路都会**现读**该目录的 `.dsh/run.json` |
+| GET | `/state?sessionId=…`（或 `?cwd=…`） | 全量状态：焦点项目、它的 buttons[]、全部条目、runs、告警、能力。`sessionId` 由 host 解析成 cwd（内存会话存储 → 会话目录，见 §7）；两条路都会**现读**该目录的 `.dsh/run-deck/run.json` |
 | POST | `/ping` | `{stage, detail?}` 客户端半边的诊断上报，**只写 host 日志**（`client-loaded` / `slot-rendered` / `state-changed`） |
 | POST | `/refresh` | 重读**全部**清单（手动全量重读；单个清单改了其实不用它，见下） |
 | POST | `/run` | `{projectRoot, entryId, sessionId?}` 开一条 PTY 把这条 entry 跑起来（`sessionId` 只用于记录与 `DSH_SESSION_ID`；可以不给） |
@@ -700,7 +700,7 @@ Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-rundeck' -List | Select-O
 3. ~~事件钩子的语义层~~ ✅ `src/hooks.ts`；**真实输出已接线**：host 每 800ms 轮询终端的
    scrollback → `manager.observe()` → ready / serverReadyAction / onReady 全部真的跑
    （`_probe/run/e2e-focus.mjs` 与 `npm run smoke:host` 里各有一条端到端证据）
-4. ~~外部按 id 调用~~ ✅ `src/tool.ts` 的 `rundeck` 工具 + `/rundeck` 命令。
+4. ~~外部按 id 调用~~ ✅ `src/tool.ts` 的 `run-deck` 工具 + `/run-deck` 命令。
    快捷键没有做：DSH 不提供 keybinding 服务（见 §8b）
 5. ~~`buttons[]` 浮动层~~ ✅ 输入框上沿的浮动条 + 三档密度 + 拖拽排序 + `+`/`⚙` 面板，
    `layout.json` 本地覆盖（顺序/显隐/密度），见 §7
@@ -743,20 +743,20 @@ npm run check        # typecheck + build + check:pack + smoke + check:registrati
 结构：
 
 ```
-dsh-rundeck/
+dsh-run-deck/
 ├── package.json / cordis.patch.yml / tsconfig*.json
 ├── src/
 │   ├── host.ts           # Cordis 插件入口：name / inject / Config / apply
 │   ├── host-config.ts    # 插件配置的归一化与读写（三级：plugin-config / settings / config.json）
 │   ├── manager.ts        # 业务核心：清单加载、焦点项目、run 登记、钩子推进、浮动按钮视图
-│   ├── projects.ts       # .dsh/run.json 的读取、注释剥离、字段收敛、变量展开、根目录归一化
+│   ├── projects.ts       # .dsh/run-deck/run.json 的读取、注释剥离、字段收敛、变量展开、根目录归一化
 │   ├── config.ts         # 单条 entry 的收敛 + ${…} 展开 + id 派生
 │   ├── exec.ts           # 执行通道探测（终端路线）+ 就绪 pattern 匹配
 │   ├── hooks.ts          # 第 3 步：事件钩子语义（beginsPattern/endsPattern/serverReadyAction/onReady）
-│   ├── tool.ts           # 第 4 步：rundeck 工具的参数分发（只接受 id，不接受命令）
+│   ├── tool.ts           # 第 4 步：run-deck 工具的参数分发（只接受 id，不接受命令）
 │   ├── store.ts          # layout.json（机器本地个人覆盖：顺序/显隐/密度，不进仓库）
-│   ├── commands.ts       # /rundeck 命令
-│   ├── routes.ts         # /dsh-rundeck/api/* HTTP 桥（同源围栏）
+│   ├── commands.ts       # /run-deck 命令
+│   ├── routes.ts         # /dsh-run-deck/api/* HTTP 桥（同源围栏）
 │   ├── types.ts          # host/client 共享类型（零运行时依赖）
 │   ├── client.tsx        # 浮动条（对齐/让开/密度/降档）+ `+` 面板 + `⚙` 面板
 │   ├── index.ts          # 包入口（重导出 host half）

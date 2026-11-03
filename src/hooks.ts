@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 事件钩子：第 3 步。
+ * dsh-run-deck — 事件钩子：第 3 步。
  *
  * 三个钩子，全部照 VS Code 的语义：
  *   - `problemMatcher.background`：beginsPattern / endsPattern，就绪判定

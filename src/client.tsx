@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — client half（TSX 源文件）。
+ * dsh-run-deck — client half（TSX 源文件）。
  *
  * 构建产物：`client/client.js`（ModuleLoader 包，见 scripts/build-client.mjs）。
  *
@@ -19,7 +19,7 @@
  * 宽度不够时**逐级降档**：full（图标+名字）→ compact（图标+定长截断）→
  * icon（纯图标）→ `⋯` 溢出菜单。顺序即优先级，顺序来自 `+` 面板里的拖拽。
  *
- * 与 host 的唯一数据通道是 `fetch("/dsh-rundeck/api/*")`，见 src/routes.ts。
+ * 与 host 的唯一数据通道是 `fetch("/dsh-run-deck/api/*")`，见 src/routes.ts。
  */
 import React from 'react';
 
@@ -30,14 +30,14 @@ import type {
   FloatingButtonView,
   NewTaskInput,
   ResolvedEntry,
-  RundeckState,
+  RunDeckState,
   RunRecord,
   TaskDetection,
   TaskGroup,
 } from './types.js';
 
-const NS = 'dsh-rundeck';
-const API = '/dsh-rundeck/api';
+const NS = 'dsh-run-deck';
+const API = '/dsh-run-deck/api';
 
 /** 客户端上下文（只列出本插件使用的部分；服务全部按可选获取）。 */
 interface ClientContext {
@@ -89,7 +89,7 @@ const ZH: Record<string, string> = {
   add: '添加按钮',
   settings: '设置',
   createTitle: '新建启动项',
-  createHint: '填名称和一行命令就够了；工作目录、环境变量、就绪正则这些收在「更多设置」里。创建后会写进这个项目的 .dsh/run.json，并自动钉到按钮条。',
+  createHint: '填名称和一行命令就够了；工作目录、环境变量、就绪正则这些收在「更多设置」里。创建后会写进这个项目的 .dsh/run-deck/run.json，并自动钉到按钮条。',
   detectTitle: '从项目里检测',
   detectHint: '点一条就填进下面的表单（填进去之后仍然可以改）。',
   detectLoading: '正在读 package.json…',
@@ -132,25 +132,25 @@ const ZH: Record<string, string> = {
   fieldButtonGroup: '按钮分组',
   fieldButtonGroupPlaceholder: '可选；同组按钮在条上相邻',
   fieldAppearanceHint: '图标与分组只写进本机的 layout.json，不进仓库、不影响别人。',
-  createdNote: '已写进 .dsh/run.json 并钉到按钮条。',
-  createdUnpinnedNote: '已写进 .dsh/run.json，但没能钉上按钮条。',
+  createdNote: '已写进 .dsh/run-deck/run.json 并钉到按钮条。',
+  createdUnpinnedNote: '已写进 .dsh/run-deck/run.json，但没能钉上按钮条。',
   pinRetryNote: '可以在 ☰「管理」面板里手动钉上。',
   manageTitle: '管理启动项',
-  manageHint: '按住某一行的 ⋮⋮ 上下拖动调顺序（也可以 Alt+↑/↓）；「从按钮条收起」只把按钮从条上移除，条目还在；「删除」会真的把这条任务从 .dsh/run.json 里移除。',
+  manageHint: '按住某一行的 ⋮⋮ 上下拖动调顺序（也可以 Alt+↑/↓）；「从按钮条收起」只把按钮从条上移除，条目还在；「删除」会真的把这条任务从 .dsh/run-deck/run.json 里移除。',
   deleteEntry: '删除',
   deleteConfirm: '确认删除',
   deleteCancel: '取消',
-  deleteHint: '从 .dsh/run.json 里移除这条任务（和"从按钮条收起"不同）',
+  deleteHint: '从 .dsh/run-deck/run.json 里移除这条任务（和"从按钮条收起"不同）',
   addAllOnBar: '全部条目都已经在按钮条上了（run.json 的 buttons[] 已把它们声明为按钮，或清单没写 buttons[] 时默认全部上条），所以这里没有可添加的条目。想试「钉到按钮条」，先对某一行点一下「从按钮条收起」。',
   newTaskTitle: '新建启动项',
-  newTaskHint: '写进这个项目的 .dsh/run.json（和手改同一个文件），创建后自动钉到按钮条。',
+  newTaskHint: '写进这个项目的 .dsh/run-deck/run.json（和手改同一个文件），创建后自动钉到按钮条。',
   newTaskLabelPlaceholder: '名称，例如：启动开发服务器',
   newTaskCommandPlaceholder: '命令，例如：npm run dev',
   newTaskCreate: '创建并钉到按钮条',
   allHiddenNote: '全部按钮已收起 · 点 + 把要用的钉回来',
   noEntriesNote: '这个目录还没有启动项 · 点 + 新建第一条',
   noProjectNote: '还没有焦点项目 · 打开一个工作区后这里就能新建启动项',
-  noManifestNote: '还没有任何启动项；用下面的表单建第一条（如果还没有 .dsh/run.json，会自动创建）。',
+  noManifestNote: '还没有任何启动项；用下面的表单建第一条（如果还没有 .dsh/run-deck/run.json，会自动创建）。',
   restoreAll: '全部钉回来',
   addPinned: '已在条上',
   addUnpinned: '未添加',
@@ -177,8 +177,8 @@ const ZH: Record<string, string> = {
   errorHint: '这是宿主返回的原话。想连带看清单告警就点「全部告警」。',
   errorOpenSettings: '全部告警（⚙）',
   errorClose: '知道了',
-  noFocus: '当前目录没有 .dsh/run.json',
-  noFocusHint: '在项目根目录放一份 .dsh/run.json，就会出现这个工作区的启动按钮。',
+  noFocus: '当前目录没有 .dsh/run-deck/run.json',
+  noFocusHint: '在项目根目录放一份 .dsh/run-deck/run.json，就会出现这个工作区的启动按钮。',
 };
 
 const EN: Record<string, string> = {
@@ -207,7 +207,7 @@ const EN: Record<string, string> = {
   add: 'Add button',
   settings: 'Settings',
   createTitle: 'New launch entry',
-  createHint: 'A name and a one-line command are enough; working directory, env vars and ready patterns live under "More settings". It is written into this project’s .dsh/run.json and pinned to the bar.',
+  createHint: 'A name and a one-line command are enough; working directory, env vars and ready patterns live under "More settings". It is written into this project’s .dsh/run-deck/run.json and pinned to the bar.',
   detectTitle: 'Detected in this project',
   detectHint: 'Click one to fill the form below (you can still change every field).',
   detectLoading: 'Reading package.json…',
@@ -250,25 +250,25 @@ const EN: Record<string, string> = {
   fieldButtonGroup: 'Button group',
   fieldButtonGroupPlaceholder: 'Optional; same group stays adjacent',
   fieldAppearanceHint: 'Icon and group only go into this machine’s layout.json — not the repo, not other people.',
-  createdNote: 'Written into .dsh/run.json and pinned to the bar.',
-  createdUnpinnedNote: 'Written into .dsh/run.json, but pinning it to the bar failed.',
+  createdNote: 'Written into .dsh/run-deck/run.json and pinned to the bar.',
+  createdUnpinnedNote: 'Written into .dsh/run-deck/run.json, but pinning it to the bar failed.',
   pinRetryNote: 'You can pin it manually from the ☰ manage panel.',
   manageTitle: 'Manage launch entries',
-  manageHint: 'Drag a row by its ⋮⋮ handle (or Alt+↑/↓) to reorder; "Hide from bar" only removes the button, while "Delete" removes the task from .dsh/run.json.',
+  manageHint: 'Drag a row by its ⋮⋮ handle (or Alt+↑/↓) to reorder; "Hide from bar" only removes the button, while "Delete" removes the task from .dsh/run-deck/run.json.',
   deleteEntry: 'Delete',
   deleteConfirm: 'Confirm delete',
   deleteCancel: 'Cancel',
-  deleteHint: 'Removes the task from .dsh/run.json (unlike "hide from bar")',
+  deleteHint: 'Removes the task from .dsh/run-deck/run.json (unlike "hide from bar")',
   addAllOnBar: 'Every entry is already on the bar (they are declared in run.json buttons[], or the manifest has no buttons[] so all entries default on), so there is nothing to add here. To try "Pin to bar", click "Hide from bar" on a row first.',
   newTaskTitle: 'New launch entry',
-  newTaskHint: 'Writes into this project’s .dsh/run.json (the same file you edit by hand) and pins it to the bar.',
+  newTaskHint: 'Writes into this project’s .dsh/run-deck/run.json (the same file you edit by hand) and pins it to the bar.',
   newTaskLabelPlaceholder: 'Name, e.g. Start dev server',
   newTaskCommandPlaceholder: 'Command, e.g. npm run dev',
   newTaskCreate: 'Create and pin',
   allHiddenNote: 'All buttons hidden · open + to pin some back',
   noEntriesNote: 'No launch entries here yet · open + to create the first one',
   noProjectNote: 'No focused project yet · open a workspace to create launch entries here',
-  noManifestNote: 'No launch entries yet; create the first one below (a .dsh/run.json will be created if missing).',
+  noManifestNote: 'No launch entries yet; create the first one below (a .dsh/run-deck/run.json will be created if missing).',
   restoreAll: 'Pin all back',
   addPinned: 'on bar',
   addUnpinned: 'not added',
@@ -295,7 +295,7 @@ const EN: Record<string, string> = {
   errorHint: 'This is the host’s own message. Use “All warnings” to see the manifest warnings too.',
   errorOpenSettings: 'All warnings (⚙)',
   errorClose: 'Got it',
-  noFocus: 'No .dsh/run.json in this directory',
+  noFocus: 'No .dsh/run-deck/run.json in this directory',
   noFocusHint: 'Add one to the project root to get this workspace’s run buttons.',
 };
 
@@ -583,12 +583,12 @@ const CSS = [
 function injectStyles(): void {
   if (typeof document === 'undefined') return;
   const existing = document.querySelector<HTMLStyleElement>(
-    'style[data-plugin-css="dsh-rundeck/main.css"]',
+    'style[data-plugin-css="dsh-run-deck/main.css"]',
   );
   const tag = existing ?? document.createElement('style');
   if (existing === null) {
     tag.dataset.plugin = NS;
-    tag.dataset.pluginCss = 'dsh-rundeck/main.css';
+    tag.dataset.pluginCss = 'dsh-run-deck/main.css';
     document.head.appendChild(tag);
   }
   if (tag.textContent !== CSS) tag.textContent = CSS;
@@ -621,12 +621,12 @@ async function call<T>(path: string, method: 'GET' | 'POST', body?: unknown): Pr
 async function pullState(
   cwd: string | null,
   sessionId: string | null,
-): Promise<ApiResult<RundeckState>> {
+): Promise<ApiResult<RunDeckState>> {
   const params = new URLSearchParams();
   if (cwd !== null && cwd.length > 0) params.set('cwd', cwd);
   if (sessionId !== null && sessionId.length > 0) params.set('sessionId', sessionId);
   const query = params.toString();
-  return call<RundeckState>(`/state${query.length > 0 ? `?${query}` : ''}`, 'GET');
+  return call<RunDeckState>(`/state${query.length > 0 ? `?${query}` : ''}`, 'GET');
 }
 
 /**
@@ -680,7 +680,7 @@ function reportEvery(stage: string, detail: Record<string, unknown>): void {
  * 每个 `runId|url` 只开一次，去重键存在浏览器本地——否则每次刷新页面都会
  * 为那些早就就绪的 run 再弹一次浏览器。
  */
-const OPENED_KEY = 'dsh-rundeck.openedUrls.v1';
+const OPENED_KEY = 'dsh-run-deck.openedUrls.v1';
 
 function openedUrls(): Set<string> {
   try {
@@ -953,7 +953,7 @@ function probeStacking(host: Element): StackProbeReport | null {
     const buttonRect = button === null ? null : button.getBoundingClientRect();
     probe = document.createElement('div');
     probe.className = '__ru_pop';
-    probe.setAttribute('data-rundeck-probe', 'stack');
+    probe.setAttribute('data-run-deck-probe', 'stack');
     probe.style.cssText =
       'position:absolute;left:0;right:0;bottom:calc(100% + 8px);height:220px;' +
       'padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;' +
@@ -1252,7 +1252,7 @@ async function stopRun(runId: string): Promise<ApiResult<unknown>> {
 }
 
 /**
- * 新建一条启动项。**host 会把它真的写进项目的 .dsh/run.json**（保留注释的最小
+ * 新建一条启动项。**host 会把它真的写进项目的 .dsh/run-deck/run.json**（保留注释的最小
  * 文本插入），所以界面加的和手写进去的是同一条东西——不是存在本地布局里的影子。
  *
  * 传的是**人填的那一组字段**（名称、一行命令、可选的 cwd/env/就绪正则…）；
@@ -1291,7 +1291,7 @@ interface BarActions {
 
 interface BarProps {
   buttons: FloatingButtonView[];
-  runs: RundeckState['runs'];
+  runs: RunDeckState['runs'];
   density: ButtonDensity;
   runtime: Runtime;
   busy: string | null;
@@ -1314,7 +1314,7 @@ interface BarProps {
   projectRoot: string | null;
   configFile?: string;
   warnings: string[];
-  capabilities: RundeckState['capabilities'];
+  capabilities: RunDeckState['capabilities'];
   hostVersion: string;
   configSource: string;
   onReorder(order: string[]): Promise<void>;
@@ -1537,7 +1537,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
         />
       ) : null}
 
-      <div className="__ru_bar" data-testid="rundeck-bar" data-density={density}>
+      <div className="__ru_bar" data-testid="run-deck-bar" data-density={density}>
         <button
           type="button"
           className="__ru_btn __ru_fixed"
@@ -3144,7 +3144,7 @@ interface HostProps {
 
 function FloatingBarHost(props: HostProps): React.ReactElement | null {
   const { runtime, ctx, sessionId } = props;
-  const [state, setState] = React.useState<RundeckState | null>(null);
+  const [state, setState] = React.useState<RunDeckState | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
   /**
    * 最近一次"跑/停"的失败原因。界面必须把它显示出来——"点了没反应"最难受的地方
@@ -3156,7 +3156,7 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
   const [pinnedEntry, setPinnedEntry] = React.useState<string | null>(null);
   const [density, setDensity] = React.useState<ButtonDensity>('full');
 
-  const pull = React.useCallback(async (): Promise<RundeckState | null> => {
+  const pull = React.useCallback(async (): Promise<RunDeckState | null> => {
     // cwd 拿得到就带上（等价于直接指定项目），拿不到就只报 sessionId，
     // 由 host 用自己的 sessions 服务把会话解析成项目根目录。
     // 注：客户端 sessions 服务的 SessionBinding.session（ISession/SessionSnapshot）
@@ -3361,7 +3361,7 @@ const plugin = {
 
     const slots = ctx.get<DshSlotsService>('slots');
     if (slots === undefined) {
-      ctx.logger?.warn?.('[dsh-rundeck] slots 服务不可用，按钮条未挂载');
+      ctx.logger?.warn?.('[dsh-run-deck] slots 服务不可用，按钮条未挂载');
       // 单独一个阶段名（report 每个阶段只发一次，复用 client-loaded 会被去重掉）。
       report('client-no-slots');
       return;
@@ -3369,8 +3369,8 @@ const plugin = {
 
     const locale = ctx.get<DshLocaleService>('locale');
     if (locale !== undefined) {
-      ctx.effect(() => locale.register(NS, 'zh', ZH), 'dsh-rundeck: zh dictionary');
-      ctx.effect(() => locale.register(NS, 'en', EN), 'dsh-rundeck: en dictionary');
+      ctx.effect(() => locale.register(NS, 'zh', ZH), 'dsh-run-deck: zh dictionary');
+      ctx.effect(() => locale.register(NS, 'en', EN), 'dsh-run-deck: en dictionary');
     }
 
     const t = (key: string): string => {
@@ -3435,7 +3435,7 @@ const plugin = {
       ),
     );
 
-    ctx.logger?.info?.('[dsh-rundeck] client half mounted');
+    ctx.logger?.info?.('[dsh-run-deck] client half mounted');
   },
 };
 

@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — host ↔ client 的 HTTP 桥。
+ * dsh-run-deck — host ↔ client 的 HTTP 桥。
  *
  * 为什么用 HTTP 路由而不是 Remote 服务：与 dsh-temptask 同一套既有做法——
  * `ctx.webServer.register()` + 浏览器 `fetch()`。它只用公开 API，不需要 typert 生成物，
@@ -19,7 +19,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { renderCommandLine } from './exec.js';
-import type { RundeckManager } from './manager.js';
+import type { RunDeckManager } from './manager.js';
 import {
   ERROR_CODES,
   type ApiError,
@@ -29,13 +29,13 @@ import {
 } from './types.js';
 
 /** 路由前缀。 */
-export const API_PREFIX = '/dsh-rundeck/api';
+export const API_PREFIX = '/dsh-run-deck/api';
 
 /** 请求体上限（这些接口的载荷都很小）。 */
 const MAX_BODY_BYTES = 16 * 1024;
 
 export interface RouteHost {
-  manager: RundeckManager;
+  manager: RunDeckManager;
   /** 启动流程完成前不处理请求。 */
   ready: Promise<void>;
   /** 宿主声明的额外可信 authority。 */
@@ -43,7 +43,7 @@ export interface RouteHost {
   log(level: 'info' | 'warn' | 'error', message: string): void;
 }
 
-export interface RundeckRoute {
+export interface RunDeckRoute {
   path: string;
   handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
 }
@@ -159,7 +159,7 @@ function messageOfError(error: unknown): string {
 
 /* ─────────────────────────── 路由构造 ─────────────────────────── */
 
-export function createRoutes(host: RouteHost): RundeckRoute[] {
+export function createRoutes(host: RouteHost): RunDeckRoute[] {
   const { manager } = host;
 
   /**
@@ -169,7 +169,7 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
     path: string,
     method: 'GET' | 'POST',
     impl: (body: Record<string, unknown>, req: IncomingMessage) => Promise<unknown>,
-  ): RundeckRoute {
+  ): RunDeckRoute {
     return {
       path,
       async handle(req, res) {
@@ -250,7 +250,7 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
         ok: false,
         code: ERROR_CODES.badRequest,
         message: '需要 projectRoot 与 entryId',
-        hint: '命令本体来自 .dsh/run.json，本接口不接受自由命令。',
+        hint: '命令本体来自 .dsh/run-deck/run.json，本接口不接受自由命令。',
       };
     }
     return { ok: true, projectRoot, entryId };
@@ -274,7 +274,7 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
       return manager.state((await focusTargetFromQuery(req)) ?? undefined);
     }),
 
-    // 重读磁盘上的清单（改了 .dsh/run.json 之后不必重启 DSH）。
+    // 重读磁盘上的清单（改了 .dsh/run-deck/run.json 之后不必重启 DSH）。
     route(`${API_PREFIX}/refresh`, 'POST', async () => {
       const projects = await manager.refresh();
       return { ok: true, projects };
@@ -364,7 +364,7 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
       return manager.setButtonOverride(entry, override);
     }),
 
-    // 界面新建启动项：**真的写进项目的 .dsh/run.json 的 tasks[]**。
+    // 界面新建启动项：**真的写进项目的 .dsh/run-deck/run.json 的 tasks[]**。
     //
     // 这和"本地覆盖不能存命令"并不冲突——两者编辑的不是同一件东西：
     //   - `layout.json` 回答"我怎么看这个项目"，永远只影响展示；
@@ -396,7 +396,7 @@ export function createRoutes(host: RouteHost): RundeckRoute[] {
       return manager.detectTasks(projectRoot);
     }),
 
-    // 界面删除启动项：真的从项目的 .dsh/run.json 的 tasks[] 里移除（连带 buttons[]）。
+    // 界面删除启动项：真的从项目的 .dsh/run-deck/run.json 的 tasks[] 里移除（连带 buttons[]）。
     // 只想从条上收起来的话走 /button 的 `pinned: false`——那条 task 仍然保留。
     route(`${API_PREFIX}/task/remove`, 'POST', async (body) => {
       const projectRoot = asString(body.projectRoot).trim();

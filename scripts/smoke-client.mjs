@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 客户端半边的离线自测。
+ * dsh-run-deck — 客户端半边的离线自测。
  *
  * 不起浏览器、不挂宿主，只验证「ModuleLoader 契约 + 纯函数行为」：
  *   1. 包的 ModuleLoader 契约（id 是包名、版本已注入）
@@ -82,7 +82,7 @@ function loadPlugin(options = {}) {
   return { exported, registration, react, window: window2 };
 }
 
-console.log('dsh-rundeck client smoke');
+console.log('dsh-run-deck client smoke');
 
 await (async () => {
   const { exported, registration, window: win } = loadPlugin();

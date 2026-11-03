@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 「+」面板的候选检测（对应 VS Code 的 "检测任务"）。
+ * dsh-run-deck — 「+」面板的候选检测（对应 VS Code 的 "检测任务"）。
  *
  * VS Code 的 `Tasks: Run Task` 里那些 `npm: dev` 不是人写出来的，是从
  * `package.json` 的 `scripts` 里探测出来的。本文件做同一件事，只是范围更窄：

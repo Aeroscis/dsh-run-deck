@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 把"界面新建的启动项"写回项目的 `.dsh/run.json`。
+ * dsh-run-deck — 把"界面新建的启动项"写回项目的 `.dsh/run-deck/run.json`。
  *
  * ## 为什么允许界面写清单，却仍禁止本地布局存命令
  *
@@ -298,7 +298,7 @@ function renderTask(task: TaskEntry, indent: string): string {
  */
 export function insertTaskIntoManifestText(text: string, task: TaskEntry): InsertTaskResult {
   const expected = countManifestTasks(text);
-  if (expected < 0) return { ok: false, message: '.dsh/run.json 现在就不是合法 JSON，先修好它' };
+  if (expected < 0) return { ok: false, message: '.dsh/run-deck/run.json 现在就不是合法 JSON，先修好它' };
   const range = findTopLevelArray(text, 'tasks');
   const candidates: string[] = [];
 
@@ -327,7 +327,7 @@ export function insertTaskIntoManifestText(text: string, task: TaskEntry): Inser
   } else {
     // 整份清单还没有 tasks 键：插到根对象最前面。
     const open = skipTrivia(text, 0);
-    if (text[open] !== '{') return { ok: false, message: '.dsh/run.json 顶层不是一个对象' };
+    if (text[open] !== '{') return { ok: false, message: '.dsh/run-deck/run.json 顶层不是一个对象' };
     const rendered = renderTask(task, '    ');
     const rest = text.slice(open + 1);
     const emptyObject = stripJsonComments(rest).replace(/[\s}]/gu, '').length === 0;
@@ -341,7 +341,7 @@ export function insertTaskIntoManifestText(text: string, task: TaskEntry): Inser
   }
   return {
     ok: false,
-    message: '没找到能安全插入的位置（清单结构比预期的复杂），请手动编辑 .dsh/run.json',
+    message: '没找到能安全插入的位置（清单结构比预期的复杂），请手动编辑 .dsh/run-deck/run.json',
   };
 }
 
@@ -425,7 +425,7 @@ export type RemoveTaskResult = { ok: true; text: string; entry: string } | { ok:
  */
 export function removeTaskFromManifestText(text: string, entryId: string): RemoveTaskResult {
   const expected = countManifestTasks(text);
-  if (expected < 0) return { ok: false, message: '.dsh/run.json 现在就不是合法 JSON，先修好它' };
+  if (expected < 0) return { ok: false, message: '.dsh/run-deck/run.json 现在就不是合法 JSON，先修好它' };
 
   const tasksRange = findTopLevelArray(text, 'tasks');
   if (tasksRange === null) return { ok: false, message: '清单里没有 tasks[]' };

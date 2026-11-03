@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 共享类型（host 与 client 都编译本文件）。
+ * dsh-run-deck — 共享类型（host 与 client 都编译本文件）。
  *
  * 约束：本文件不得 import 任何 node 内置模块或 host 专属类型，否则 client 包会被污染。
  *
@@ -110,7 +110,7 @@ export interface ButtonConfig {
   order?: number;
 }
 
-/** `.dsh/run.json` 的顶层结构。 */
+/** `.dsh/run-deck/run.json` 的顶层结构。 */
 export interface RunConfigDocument {
   version?: string;
   inputs?: InputVariable[];
@@ -120,9 +120,9 @@ export interface RunConfigDocument {
 
 /* ─────────────────────────── 插件自己的运行时类型 ─────────────────────────── */
 
-/** 插件配置（DSH settings 命名空间 `dsh-rundeck` 的字段）。 */
-export interface RundeckConfig {
-  /** 记录文件目录；空字符串 = `<DSH_HOME>/plugin-data/dsh-rundeck`。 */
+/** 插件配置（DSH settings 命名空间 `dsh-run-deck` 的字段）。 */
+export interface RunDeckConfig {
+  /** 记录文件目录；空字符串 = `<DSH_HOME>/plugin-data/dsh-run-deck`。 */
   dataDir: string;
   /** 额外的清单文件路径（没有固定项目根目录时用；留空 = 只从工作区读）。 */
   configPath: string;
@@ -157,7 +157,7 @@ export interface ResolvedEntry {
  * 「+」面板提交的一条新启动项。
  *
  * 这些字段就是 `TaskEntry` 里**界面可以填**的那一组（`label` / `command` 必填）。
- * 它被 host 收敛成 `TaskEntry` 之后才写进 `.dsh/run.json`——写入的仍然是清单里
+ * 它被 host 收敛成 `TaskEntry` 之后才写进 `.dsh/run-deck/run.json`——写入的仍然是清单里
  * 的字面量，界面不新增任何执行能力。
  */
 export interface NewTaskInput {
@@ -218,19 +218,19 @@ export interface TaskDetection {
   warnings: string[];
 }
 
-/** 一个项目根目录（.dsh/run.json 所在处）及其清单。 */
+/** 一个项目根目录（.dsh/run-deck/run.json 所在处）及其清单。 */
 export interface RunProject {
   /** 项目根目录绝对路径（= workspaceFolder）。 */
   root: string;
   /** 目录名，作展示用。 */
   name: string;
-  /** `.dsh/run.json` 的绝对路径；没有该文件时为 undefined。 */
+  /** `.dsh/run-deck/run.json` 的绝对路径；没有该文件时为 undefined。 */
   configFile?: string;
   /**
    * 读这份清单时它的 mtime（毫秒）。
    *
    * 用途只有一个：`/state` 每 2.5 秒问一次焦点项目，靠它判断"清单被改过了"，
-   * 改过就**自动重读**——否则用户改完 run.json 必须重启 DSH 或者手敲 `/rundeck list`
+   * 改过就**自动重读**——否则用户改完 run.json 必须重启 DSH 或者手敲 `/run-deck list`
    * 才生效（实测就是这么被绊住的：改完 pattern 发现界面还是旧的）。
    */
   manifestMtimeMs?: number;
@@ -318,14 +318,14 @@ export interface FocusedProject {
   cwd: string;
   /** 解析出的项目根目录；null = 这个 cwd 下没有可用的清单。 */
   projectRoot: string | null;
-  /** `.dsh/run.json` 的绝对路径；没有则 undefined。 */
+  /** `.dsh/run-deck/run.json` 的绝对路径；没有则 undefined。 */
   configFile?: string;
   /** 为什么没有项目（cwd 空 / 目录不存在 / 没有 manifest / manifest 坏了）。 */
   reason?: string;
 }
 
-/** `GET /dsh-rundeck/api/state` 的返回体。 */
-export interface RundeckState {
+/** `GET /dsh-run-deck/api/state` 的返回体。 */
+export interface RunDeckState {
   ok: true;
   /** host 半边的插件版本（改代码后是否生效，靠它判断）。 */
   pluginVersion: string;
@@ -345,7 +345,7 @@ export interface RundeckState {
   /** 浮动层布局的个人覆盖（顺序、分组、显隐、密度），不进仓库。 */
   layout: LocalLayout;
   warnings: string[];
-  capabilities: RundeckCapabilities;
+  capabilities: RunDeckCapabilities;
   /** 服务端时间（epoch ms）。 */
   now: number;
 }
@@ -381,7 +381,7 @@ export type ConfigSource =
   | 'cordis-row'
   | 'defaults';
 
-export interface RundeckCapabilities {
+export interface RunDeckCapabilities {
   /**
    * 宿主能否真起进程：`ctx.subprocess.spawnTerminal`（真 PTY）在不在。
    *

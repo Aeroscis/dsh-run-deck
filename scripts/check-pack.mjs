@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 发布形态自检（`npm run check:pack`，也挂在 `prepack` 上）。
+ * dsh-run-deck — 发布形态自检（`npm run check:pack`，也挂在 `prepack` 上）。
  *
  * 为什么需要它：`npm pack` 只按 package.json 的 `files` 白名单取文件——
  * 少写一条，装到你插件的人就会遇到"包能装上但运行时报模块找不到"，

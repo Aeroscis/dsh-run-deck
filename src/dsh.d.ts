@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — DSH 接口的最小环境声明。
+ * dsh-run-deck — DSH 接口的最小环境声明。
  *
  * 为什么需要这个文件：DSH 以「已打包的 JS」发布（`@deepseek-ai/dsh-*` 的 lib/*.js），
  * 包内**不携带 .d.ts**，因此插件无法直接 import 官方类型。这里只声明本插件真正

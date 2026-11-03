@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 第 4 步：外部按 id 调用。
+ * dsh-run-deck — 第 4 步：外部按 id 调用。
  *
  * 需求原文："外部按 id 调用（slash command 或 tool）加快捷键"。
  * 两件都做，但它们调的是**同一个** manager 方法——不存在两套逻辑
@@ -7,7 +7,7 @@
  *
  * ## 为什么 tool 是第 4 步的主体
  *
- * slash command 已经在第 2 步做掉了（`/rundeck run <id>`）。这一步补的是
+ * slash command 已经在第 2 步做掉了（`/run-deck run <id>`）。这一步补的是
  * **agent 侧**：让模型能按 id 把一个条目跑起来，以及**停下来**。
  *
  * 安全边界与 HTTP 路由完全一致：
@@ -20,20 +20,20 @@
  */
 import { renderCommandLine } from './exec.js';
 import { messageOf } from './sessions.js';
-import type { RundeckManager } from './manager.js';
+import type { RunDeckManager } from './manager.js';
 
 /** `@deepseek-ai/dsh-tools` 导出的 defineTool（动态 import，缺失即降级）。 */
 type DshDefineTool = (definition: DshToolDefinition) => unknown;
 
 /** tool 名（模型看到的就是这个）。 */
-export const TOOL_NAME = 'rundeck';
+export const TOOL_NAME = 'run-deck';
 
 /** 工具描述：说清"它只跑 run.json 里声明过的东西"。 */
 const TOOL_DESCRIPTION = [
-  'Run a configured entry from a project’s .dsh/run.json (VS Code tasks.json vocabulary).',
+  'Run a configured entry from a project’s .dsh/run-deck/run.json (VS Code tasks.json vocabulary).',
   'The entry must already exist in that manifest: this tool never accepts a free-form command.',
   'Use it to start, stop, or rerun a declared launcher — for example a dev server or build script.',
-  'Call /rundeck list first when you do not know the entry id.',
+  'Call /run-deck list first when you do not know the entry id.',
 ].join(' ');
 
 /** 工具的参数 schema（JSON Schema 子集，与 dsh-tool-* 的写法一致）。 */
@@ -117,7 +117,7 @@ export async function dispatchToolArgs(
   if (action === 'run') {
     const entryId = typeof args['entry_id'] === 'string' ? args['entry_id'].trim() : '';
     if (entryId.length === 0) {
-      return flatten({ ok: false, message: 'action=run 需要 entry_id（用 /rundeck list 看有哪些 id）' });
+      return flatten({ ok: false, message: 'action=run 需要 entry_id（用 /run-deck list 看有哪些 id）' });
     }
     // 按 id 精确定位：不按 label 找（label 可重名，不能当接口）。
     const found = host.listEntries().find((candidate) => candidate.entryId === entryId);
@@ -161,7 +161,7 @@ export async function dispatchToolArgs(
 }
 
 /** 供 `dispatchToolArgs` 用的最小 manager 面（也便于测试替身）。 */
-export interface RundeckToolHost {
+export interface RunDeckToolHost {
   listEntries(): Array<{ projectRoot: string; entryId: string }>;
   run(projectRoot: string, entryId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string }>;
   stop(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
@@ -169,15 +169,15 @@ export interface RundeckToolHost {
 }
 
 /**
- * 注册 `rundeck` 工具。
+ * 注册 `run-deck` 工具。
  *
  * @param ctx host Cordis 上下文
  * @param manager 业务核心（与 HTTP 路由、slash command 共用同一个）
  * @param ready 插件启动完成后才处理调用
  */
-export async function registerRundeckTool(
+export async function registerRunDeckTool(
   ctx: DshContext,
-  manager: RundeckManager,
+  manager: RunDeckManager,
   ready: Promise<void>,
   log: (level: 'info' | 'warn', message: string) => void,
 ): Promise<ToolRegistration> {
@@ -199,7 +199,7 @@ export async function registerRundeckTool(
   }
 
   /** manager → 工具参数分发的最小面。 */
-  const host: RundeckToolHost = {
+  const host: RunDeckToolHost = {
     listEntries: () =>
       manager.listProjects().flatMap((project) =>
         project.entries.map((entry) => ({ projectRoot: project.root, entryId: entry.id })),
@@ -241,7 +241,7 @@ export async function registerRundeckTool(
       await manager.refresh();
       // owner = **调用这个工具的 Agent**：终端归发起它的会话（见 exec.ts 的 owner 说明）。
       const ownerSessionId = exec?.agent?.id;
-      const callHost: RundeckToolHost = {
+      const callHost: RunDeckToolHost = {
         listEntries: host.listEntries,
         run: (projectRoot, entryId) =>
           manager.startRun({
@@ -276,13 +276,13 @@ export async function registerRundeckTool(
   });
 
   const dispose = tools.register(tool);
-  ctx.effect(() => dispose, 'dsh-rundeck: rundeck tool');
+  ctx.effect(() => dispose, 'dsh-run-deck: run-deck tool');
   log('info', `已注册 ${TOOL_NAME} 工具`);
   return { mounted: true };
 }
 
 /** 供命令面板用的"跑一条"说明（与工具描述分开：命令是人看的）。 */
-export function describeRun(entryId: string, manager: RundeckManager): string {
+export function describeRun(entryId: string, manager: RunDeckManager): string {
   for (const project of manager.listProjects()) {
     const entry = project.entries.find((candidate) => candidate.id === entryId);
     if (entry !== undefined) return renderCommandLine(entry);

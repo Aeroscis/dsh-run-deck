@@ -1,7 +1,7 @@
 /**
- * dsh-rundeck — `/rundeck` 命令（host 侧）。
+ * dsh-run-deck — `/run-deck` 命令（host 侧）。
  *
- * `/rundeck [list | run <id> | stop <runId> | rerun <runId> | path | help]`
+ * `/run-deck [list | run <id> | stop <runId> | rerun <runId> | path | help]`
  *
  * 定位：浮动按钮条是给人点的界面，命令是**同一个动作的另一个入口**——
  * 脚本化、跨 profile 查看、不方便点鼠标的时候。两边调的是同一个 manager，
@@ -11,13 +11,13 @@
  */
 import { messageOf } from './sessions.js';
 import { renderCommandLine } from './exec.js';
-import type { RundeckManager } from './manager.js';
+import type { RunDeckManager } from './manager.js';
 import type { ApiError, ResolvedEntry, RunRecord } from './types.js';
 
 /** 命令的返回体（`DshCommandResult` 是 dsh.d.ts 里的全局类型，这里起个别名）。 */
 type TaskResult = DshCommandResult;
 
-/** 解析 `/rundeck` 之后的参数，支持双引号/单引号包裹。 */
+/** 解析 `/run-deck` 之后的参数，支持双引号/单引号包裹。 */
 export function parseArgs(input: string): string[] {
   const args: string[] = [];
   let current = '';
@@ -68,19 +68,19 @@ function statusLabel(run: RunRecord): string {
 }
 
 export interface CommandDeps {
-  manager: RundeckManager;
+  manager: RunDeckManager;
   /** 插件启动完成（清单已载入）后才执行命令逻辑。 */
   ready: Promise<void>;
 }
 
-/** 构造 `/rundeck` 命令定义。 */
-export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
+/** 构造 `/run-deck` 命令定义。 */
+export function createRunDeckCommand(deps: CommandDeps): DshCommandDefinition {
   const { manager, ready } = deps;
 
   return {
-    name: 'rundeck',
+    name: 'run-deck',
     description:
-      'Run Configuration：列出 / 跑 / 停 / 重跑 .dsh/run.json 里声明的条目（词汇表同 VS Code tasks.json）',
+      'Run Configuration：列出 / 跑 / 停 / 重跑 .dsh/run-deck/run.json 里声明的条目（词汇表同 VS Code tasks.json）',
     input: { hint: '[list | run <id> | stop <runId> | rerun <runId> | path | help]' },
     async handler(invocation) {
       try {
@@ -89,7 +89,7 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
         // owner = **调用这条命令的 Agent**：终端归发起它的会话（见 exec.ts 的 owner 说明）。
         return await handle(invocation.rawInput, invocation.agent.id);
       } catch (error) {
-        return { kind: 'error', text: `❌ /rundeck 执行失败：${messageOf(error)}` };
+        return { kind: 'error', text: `❌ /run-deck 执行失败：${messageOf(error)}` };
       }
     },
   };
@@ -129,7 +129,7 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
     if (withEntries.length === 0) {
       return {
         kind: 'success',
-        text: `📋 没有找到任何条目。\n在工作区根目录放一份 .dsh/run.json 即可。${warn}`,
+        text: `📋 没有找到任何条目。\n在工作区根目录放一份 .dsh/run-deck/run.json 即可。${warn}`,
       };
     }
 
@@ -154,7 +154,7 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
 
     return {
       kind: 'success',
-      text: `📋 Run Configuration\n\n${body}${runsText}\n\n跑：/rundeck run <id>${warn}`,
+      text: `📋 Run Configuration\n\n${body}${runsText}\n\n跑：/run-deck run <id>${warn}`,
     };
   }
 
@@ -198,14 +198,14 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
 
   async function runText(query: string, sessionId: string): Promise<TaskResult> {
     if (query.trim().length === 0) {
-      return { kind: 'error', text: '用法：/rundeck run <id>（先用 /rundeck list 看有哪些 id）' };
+      return { kind: 'error', text: '用法：/run-deck run <id>（先用 /run-deck list 看有哪些 id）' };
     }
     // id 里可能带 `/`（例如 `jin/web`），所以按**完整 id** 找，不再切分。
     const projectRoot = findProject(query);
     if (projectRoot === undefined) {
       return {
         kind: 'error',
-        text: `❌ 找不到条目「${query}」。用 /rundeck list 查看可用的 id（含空格的标题用引号包住）。`,
+        text: `❌ 找不到条目「${query}」。用 /run-deck list 查看可用的 id（含空格的标题用引号包住）。`,
       };
     }
     const entry = resolveEntry(projectRoot, query.trim());
@@ -221,14 +221,14 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
         `   命令：${renderCommandLine(entry)}\n` +
         `   目录：${entry.cwd}\n` +
         `   进程：${result.pid !== undefined && result.pid > 0 ? `pid ${result.pid}` : '(宿主没给 pid)'}\n` +
-        `   runId：${result.runId}${entry.isBackground ? '\n   （长驻：跑完不退出，用 /rundeck stop 停）' : ''}\n` +
-        `   停止：/rundeck stop ${result.runId}`,
+        `   runId：${result.runId}${entry.isBackground ? '\n   （长驻：跑完不退出，用 /run-deck stop 停）' : ''}\n` +
+        `   停止：/run-deck stop ${result.runId}`,
     };
   }
 
   async function stopText(runId: string): Promise<TaskResult> {
     const trimmed = runId.trim();
-    if (trimmed.length === 0) return { kind: 'error', text: '用法：/rundeck stop <runId>' };
+    if (trimmed.length === 0) return { kind: 'error', text: '用法：/run-deck stop <runId>' };
     const result = await manager.stopRun(trimmed);
     if (!result.ok) return { kind: 'error', text: renderError(result) };
     return {
@@ -239,7 +239,7 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
 
   async function rerunText(runId: string): Promise<TaskResult> {
     const trimmed = runId.trim();
-    if (trimmed.length === 0) return { kind: 'error', text: '用法：/rundeck rerun <runId>' };
+    if (trimmed.length === 0) return { kind: 'error', text: '用法：/run-deck rerun <runId>' };
     const result = await manager.rerun(trimmed);
     if (!result.ok) return { kind: 'error', text: renderError(result) };
     return {
@@ -251,7 +251,7 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
   function pathText(): TaskResult {
     const projects = manager.listProjects();
     const lines = projects.map(
-      (project) => `  • ${project.name}：${project.configFile ?? '（没有 .dsh/run.json）'}`,
+      (project) => `  • ${project.name}：${project.configFile ?? '（没有 .dsh/run-deck/run.json）'}`,
     );
     return {
       kind: 'success',
@@ -263,12 +263,12 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
     return [
       '🗂 Run Configuration 命令',
       '',
-      '  /rundeck list                    列出全部条目（id / 命令 / 目录）+ 进行中的 run',
-      '  /rundeck run <id>                跑一个条目（id 用 /rundeck list 里那个）',
-      '  /rundeck stop <runId>            停掉一个 run',
-      '  /rundeck rerun <runId>           停掉旧的再开新的',
-      '  /rundeck path                    显示各项目的 .dsh/run.json 落点',
-      '  /rundeck help                    显示本帮助',
+      '  /run-deck list                    列出全部条目（id / 命令 / 目录）+ 进行中的 run',
+      '  /run-deck run <id>                跑一个条目（id 用 /run-deck list 里那个）',
+      '  /run-deck stop <runId>            停掉一个 run',
+      '  /run-deck rerun <runId>           停掉旧的再开新的',
+      '  /run-deck path                    显示各项目的 .dsh/run-deck/run.json 落点',
+      '  /run-deck help                    显示本帮助',
       '',
       '条目词汇表与 VS Code tasks.json 一致（type/command/args/options.cwd/isBackground/',
       'problemMatcher/presentation/group、${input:id}、${workspaceFolder}、${env:X}、',
@@ -284,6 +284,6 @@ export function createRundeckCommand(deps: CommandDeps): DshCommandDefinition {
 
 /** 命令的 rawInput 一般已是参数部分；万一带了命令名则剥掉。 */
 function stripCommandName(rawInput: string): string {
-  const text = rawInput.replace(/^\s*\/?rundeck\b/u, '').trim();
+  const text = rawInput.replace(/^\s*\/?run-deck\b/u, '').trim();
   return text.length > 0 ? text : rawInput.trim();
 }

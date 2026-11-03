@@ -1,7 +1,7 @@
 {
-  "name": "@aeroscis/dsh-rundeck",
+  "name": "@aeroscis/dsh-run-deck",
   "version": "0.1.0",
-  "description": "DSH Run Configuration：按项目根目录 .dsh/run.json 里声明的条目跑/停/重跑，附可钉住的浮动按钮。Vocabulary 照抄 VS Code tasks.json。",
+  "description": "DSH Run Configuration：按项目根目录 .dsh/run-deck/run.json 里声明的条目跑/停/重跑，附可钉住的浮动按钮。Vocabulary 照抄 VS Code tasks.json。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -36,11 +36,11 @@
   "author": "Aeroscis",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Aeroscis/dsh-rundeck.git"
+    "url": "git+https://github.com/Aeroscis/dsh-run-deck.git"
   },
-  "homepage": "https://github.com/Aeroscis/dsh-rundeck#readme",
+  "homepage": "https://github.com/Aeroscis/dsh-run-deck#readme",
   "bugs": {
-    "url": "https://github.com/Aeroscis/dsh-rundeck/issues"
+    "url": "https://github.com/Aeroscis/dsh-run-deck/issues"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",

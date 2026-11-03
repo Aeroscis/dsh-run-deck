@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — client bundle builder.
+ * dsh-run-deck — client bundle builder.
  *
  * `tsc -p tsconfig.client.json` 把 `src/client.tsx` 编译成标准 ESM
  * （`build/client/client.js`），但 DSH 浏览器端加载的是 **ModuleLoader 包**：
@@ -88,13 +88,13 @@ const banner = `window.__ModuleLoader__.load({
   factory: (require) => {`;
 
 const bundle = `/**
- * dsh-rundeck — client half（构建产物，请勿直接编辑）。
+ * dsh-run-deck — client half（构建产物，请勿直接编辑）。
  *
  * 源文件：src/client.tsx；构建：npm run build:client
  * （tsc → build/client/client.js → 本脚本包装成 ModuleLoader 包）。
  *
  * 运行在 DSH Web 页面里，通过 ctx.slots / ctx.locale 与宿主通信，
- * 通过 fetch("/dsh-rundeck/api/*") 与 host half 通信。
+ * 通过 fetch("/dsh-run-deck/api/*") 与 host half 通信。
  */
 ${banner}
     var module = { exports: {} };

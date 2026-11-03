@@ -1,8 +1,8 @@
 /**
- * dsh-rundeck — run.json 的读取与词法收敛。
+ * dsh-run-deck — run.json 的读取与词法收敛。
  *
  * 本文件只有两件事：
- *   1. **读** `.dsh/run.json`（JSON with comments 由调用方先剥掉，见 parseDocument）
+ *   1. **读** `.dsh/run-deck/run.json`（JSON with comments 由调用方先剥掉，见 parseDocument）
  *   2. **收敛** 字段到明确类型，不发明新字段、不提供默认行为之外的东西
  *
  * 收敛策略：**宽容读、严格用**。类型不对的字段被忽略并记一条告警，

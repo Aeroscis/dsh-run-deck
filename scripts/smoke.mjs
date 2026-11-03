@@ -1,5 +1,5 @@
 /**
- * dsp-rundeck — 离线冒烟测试（host half）。
+ * dsh-run-deck — 离线冒烟测试（host half）。
  *
  * 不起 DSH、不接浏览器，只验证四件能在进程里直接验的事：
  *   1. run.json 的读取与收敛（stripJsonComments / coerceDocument / resolveEntries）
@@ -42,7 +42,7 @@ async function check(name, body) {
   }
 }
 
-console.log('dsh-rundeck host smoke');
+console.log('dsh-run-deck host smoke');
 
 /* ── stripJsonComments ── */
 
@@ -202,7 +202,7 @@ await check('没有 problemMatcher 时不匹配', () => {
 /* ── 本地覆盖（layout.json） ── */
 
 await check('layout 的原子写 + 读回', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-'));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-'));
   const file = join(dir, 'layout.json');
   await writeLayout(file, { buttons: { 'jin/web': { pinned: false } } });
   const read = await readLayout(file);
@@ -210,7 +210,7 @@ await check('layout 的原子写 + 读回', async () => {
 });
 
 await check('布局文件不存在时是空覆盖（不是错误）', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-'));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-'));
   const read = await readLayout(join(dir, 'nope.json'));
   assert.deepEqual(read, { buttons: {} });
 });
@@ -412,10 +412,10 @@ await check('需求给的完整样例能读能解析', () => {
 /* ── 从磁盘读一个真实样例 ── */
 
 await check('磁盘上的样例 manifest 能被读完', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     '// comment\n' +
       JSON.stringify({
         version: '2.0.0',
@@ -427,8 +427,43 @@ await check('磁盘上的样例 manifest 能被读完', async () => {
   const { project } = await loadProject(dir);
   assert.equal(project.entries.length, 1);
   assert.equal(project.entries[0]?.id, 't');
-  assert.equal(project.configFile, join(dir, '.dsh', 'run.json'));
+  assert.equal(project.configFile, join(dir, '.dsh', 'run-deck', 'run.json'));
   assert.deepEqual(project.warnings, []);
+});
+
+await check('清单还在旧位置 .dsh/run.json：照常读写并告警；新旧并存时以新位置为准', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-legacy-'));
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  writeFileSync(
+    join(dir, '.dsh', 'run.json'),
+    JSON.stringify({
+      version: '2.0.0',
+      tasks: [{ label: 'old', id: 'old', command: 'node', args: ['old.js'] }],
+    }),
+    'utf8',
+  );
+
+  const legacy = await loadProject(dir);
+  assert.equal(legacy.project.configFile, join(dir, '.dsh', 'run.json'), '旧位置仍是可读的清单');
+  assert.deepEqual(legacy.project.entries.map((entry) => entry.id), ['old']);
+  assert.ok(
+    legacy.project.warnings.some((warning) => warning.includes('旧位置')),
+    `要有"挪到新位置"的告警：${legacy.project.warnings.join(' | ')}`,
+  );
+
+  // 新旧并存：新位置赢，旧位置只是没人再去读的孤儿（不合并、不删除）
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(
+    join(dir, '.dsh', 'run-deck', 'run.json'),
+    JSON.stringify({
+      version: '2.0.0',
+      tasks: [{ label: 'new', id: 'new', command: 'node', args: ['new.js'] }],
+    }),
+    'utf8',
+  );
+  const both = await loadProject(dir);
+  assert.equal(both.project.configFile, join(dir, '.dsh', 'run-deck', 'run.json'));
+  assert.deepEqual(both.project.entries.map((entry) => entry.id), ['new']);
 });
 
 /* ================================================================== *
@@ -683,7 +718,7 @@ await check('真实样例 jin/web 跑完整链路：begins → ready → open + 
 
 
 /* ================================================================== *
- * 第 4 步：外部按 id 调用（rundeck 工具的参数分发）
+ * 第 4 步：外部按 id 调用（run-deck 工具的参数分发）
  * ================================================================== */
 
 /** 测试替身：记录被调用了什么，不真的起进程（run/stop/rerun 现在是异步的）。 */
@@ -795,8 +830,8 @@ const ENTRIES = [
   { projectRoot: 'D:/Ceola', entryId: 'ceola/desktop' },
 ];
 
-await check('工具名是 rundeck', async () => {
-  assert.equal(TOOL_NAME, 'rundeck');
+await check('工具名是 run-deck', async () => {
+  assert.equal(TOOL_NAME, 'run-deck');
 });
 
 await check('action=run 按 entry_id 精确定位并发起', async () => {
@@ -898,24 +933,24 @@ await check('成功返回体只用下划线字段名（模型侧是 snake_case�
   assert.ok(keys.includes('run_id'));
 });
 
-/* ── configPath 的两种形态（回归：曾经把 <x>/.dsh/run.json 读成 <x>/.dsh/.dsh/run.json）── */
+/* ── configPath 的两种形态（回归：曾经把 <x>/.dsh/run-deck/run.json 读成 <x>/.dsh/.dsh/run-deck/run.json）── */
 
-await check('configPath 指向 <x>/.dsh/run.json 时，项目根是 <x>', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+await check('configPath 指向 <x>/.dsh/run-deck/run.json 时，项目根是 <x>', async () => {
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [{ label: 't', id: 't', command: 'echo', args: ['hi'] }],
     }),
     'utf8',
   );
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
-    config: () => ({ dataDir: '', configPath: join(dir, '.dsh', 'run.json') }),
+    config: () => ({ dataDir: '', configPath: join(dir, '.dsh', 'run-deck', 'run.json') }),
     configSource: () => 'defaults',
     log: () => {},
   });
@@ -932,16 +967,16 @@ await check('configPath 指向 <x>/.dsh/run.json 时，项目根是 <x>', async 
   assert.equal(entry?.id, 't');
 });
 
-await check('configPath 指向目录时，按普通项目根目录读它的 .dsh/run.json', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+await check('configPath 指向目录时，按普通项目根目录读它的 .dsh/run-deck/run.json', async () => {
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({ version: '2.0.0', tasks: [{ label: 'd', id: 'd', command: 'echo' }] }),
     'utf8',
   );
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: dir }),
@@ -954,10 +989,10 @@ await check('configPath 指向目录时，按普通项目根目录读它的 .dsh
 });
 
 await check('configPath 指向一个不叫 run.json 的清单时如实告警，不假装能读', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-'));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-'));
   writeFileSync(join(dir, 'my-tasks.json'), JSON.stringify({ tasks: [] }), 'utf8');
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: join(dir, 'my-tasks.json') }),
@@ -968,13 +1003,13 @@ await check('configPath 指向一个不叫 run.json 的清单时如实告警，�
   const warnings = manager.getWarnings();
   assert.ok(
     warnings.some((warning) => warning.includes('只认') && warning.includes('run.json')),
-    `应当告警说明只认 .dsh/run.json，实际告警：${warnings.join(' | ')}`,
+    `应当告警说明只认 .dsh/run-deck/run.json，实际告警：${warnings.join(' | ')}`,
   );
 });
 
 await check('configPath 不存在时告警并继续，不抛错', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const manager = new RundeckManager({
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: '/no/such/path/run.json' }),
@@ -991,11 +1026,11 @@ await check('configPath 不存在时告警并继续，不抛错', async () => {
 /* ── 第 5 步：浮动按钮本地覆盖只能改展示，不能改执行 ── */
 
 await check('listButtons 合并 run.json 的 buttons[] 与本地覆盖', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-btn-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [
@@ -1009,8 +1044,8 @@ await check('listButtons 合并 run.json 的 buttons[] 与本地覆盖', async (
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btndata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-btndata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1028,11 +1063,11 @@ await check('listButtons 合并 run.json 的 buttons[] 与本地覆盖', async (
 });
 
 await check('本地覆盖 pinned:false 只隐藏按钮，不删条目', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-btn-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [{ label: 'web', id: 'a/web', command: 'python' }],
@@ -1040,9 +1075,9 @@ await check('本地覆盖 pinned:false 只隐藏按钮，不删条目', async ()
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btndata-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-btndata-'));
   const runtime = fakeRuntime();
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: runtime.ctx,
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1055,7 +1090,7 @@ await check('本地覆盖 pinned:false 只隐藏按钮，不删条目', async ()
   const result = await manager.setButtonOverride('a/web', { pinned: false });
   assert.equal(result.ok, true);
   assert.equal(manager.listButtons().length, 0, '隐藏后浮动层不该再有它');
-  // 条目本身还在，仍能被 /rundeck run 调用
+  // 条目本身还在，仍能被 /run-deck run 调用
   assert.equal(manager.listProjects()[0]?.entries.length, 1);
   const project = manager.listProjects()[0];
   assert.ok(project !== undefined);
@@ -1064,11 +1099,11 @@ await check('本地覆盖 pinned:false 只隐藏按钮，不删条目', async ()
 });
 
 await check('「钉到按钮条」能把没进 buttons[] 的 task 添加上条，也能再收回去', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-btn-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [
@@ -1079,8 +1114,8 @@ await check('「钉到按钮条」能把没进 buttons[] 的 task 添加上条�
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btndata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-btndata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1108,12 +1143,12 @@ await check('「钉到按钮条」能把没进 buttons[] 的 task 添加上条�
 });
 
 await check('/button 走 HTTP 也认 `pinned: false`（收起不是空操作）', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btnwire-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-btnwire-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [
@@ -1124,8 +1159,8 @@ await check('/button 走 HTTP 也认 `pinned: false`（收起不是空操作）'
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btnwiredata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-btnwiredata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1139,7 +1174,7 @@ await check('/button 走 HTTP 也认 `pinned: false`（收起不是空操作）'
     trustedHosts: () => [],
     log: () => {},
   });
-  const path = '/dsh-rundeck/api/button';
+  const path = '/dsh-run-deck/api/button';
 
   const added = await callRoute(routes, path, '', {
     method: 'POST',
@@ -1162,11 +1197,11 @@ await check('/button 走 HTTP 也认 `pinned: false`（收起不是空操作）'
 });
 
 await check('手改 layout.json 会在下次同步时生效（不用重启）', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-layoutsync-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-layoutsync-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [
@@ -1176,8 +1211,8 @@ await check('手改 layout.json 会在下次同步时生效（不用重启）', 
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-layoutsyncdata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-layoutsyncdata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1209,10 +1244,10 @@ await check('手改 layout.json 会在下次同步时生效（不用重启）', 
 });
 
 await check('界面新建启动项：真的写进 run.json 的 tasks[]，条目立刻可用', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-newtask-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  const manifestPath = join(dir, '.dsh', 'run.json');
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-newtask-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run-deck', 'run.json');
   writeFileSync(
     manifestPath,
     [
@@ -1227,8 +1262,8 @@ await check('界面新建启动项：真的写进 run.json 的 tasks[]，条目�
     ].join('\n'),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-newtaskdata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-newtaskdata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1276,12 +1311,12 @@ await check('界面新建启动项：真的写进 run.json 的 tasks[]，条目�
 });
 
 await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已在清单" → 删 + buttons[] 清理', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-taskhttp-'));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-taskhttp-'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }), 'utf8');
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-taskhttpdata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-taskhttpdata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1292,21 +1327,21 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
   const routes = createRoutes({ manager, ready: Promise.resolve(), trustedHosts: () => [], log: () => {} });
 
   // 缺参必须报错：三个路由都不许"没给 projectRoot 也继续"
-  const noRoot = await callRoute(routes, '/dsh-rundeck/api/task', '', { method: 'POST', body: {} });
+  const noRoot = await callRoute(routes, '/dsh-run-deck/api/task', '', { method: 'POST', body: {} });
   assert.equal(noRoot.ok, false);
   assert.match(noRoot.message, /projectRoot/);
-  const noDetect = await callRoute(routes, '/dsh-rundeck/api/detect', '', { method: 'POST', body: {} });
+  const noDetect = await callRoute(routes, '/dsh-run-deck/api/detect', '', { method: 'POST', body: {} });
   assert.equal(noDetect.ok, false);
-  const noRemove = await callRoute(routes, '/dsh-rundeck/api/task/remove', '', {
+  const noRemove = await callRoute(routes, '/dsh-run-deck/api/task/remove', '', {
     method: 'POST',
     body: { projectRoot: dir },
   });
   assert.equal(noRemove.ok, false);
 
-  const taskPath = '/dsh-rundeck/api/task';
+  const taskPath = '/dsh-run-deck/api/task';
 
   // 先检测一次：还没有条目时 dev 不该被标"已在清单"
-  const detectPath = '/dsh-rundeck/api/detect';
+  const detectPath = '/dsh-run-deck/api/detect';
   const detectBefore = await callRoute(routes, detectPath, '', {
     method: 'POST',
     body: { projectRoot: dir },
@@ -1332,7 +1367,7 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
   });
   assert.equal(created.ok, true, `建条失败：${created.message ?? ''}`);
   if (!created.ok) return;
-  const document = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run.json'), 'utf8')));
+  const document = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), 'utf8')));
   assert.equal(document.tasks[0].id, 'api-dev');
   assert.equal(document.tasks[0].isBackground, true);
 
@@ -1348,13 +1383,13 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
     true,
   );
 
-  const removePath = '/dsh-rundeck/api/task/remove';
+  const removePath = '/dsh-run-deck/api/task/remove';
   const removed = await callRoute(routes, removePath, '', {
     method: 'POST',
     body: { projectRoot: dir, entryId: 'api-dev' },
   });
   assert.equal(removed.ok, true, `删条失败：${removed.message ?? ''}`);
-  const after = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run.json'), 'utf8')));
+  const after = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), 'utf8')));
   assert.equal(after.tasks.length, 0, '删除要把 tasks[] 清空');
   assert.deepEqual(after.buttons ?? [], [], 'buttons[] 里不该留下悬空声明');
 
@@ -1372,17 +1407,17 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
 });
 
 await check('同清单两个并发 createTask 不丢改动：两条都落盘、清单可解析、id 各自唯一', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-race-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  const manifestPath = join(dir, '.dsh', 'run.json');
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-race-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run-deck', 'run.json');
   writeFileSync(
     manifestPath,
     '{\n  // 冲突会在这里露馅\n  "version": "2.0.0",\n  "tasks": []\n}\n',
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-racedata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-racedata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1424,7 +1459,7 @@ await check('重复显式 id：删除定位用的 id 派生与 resolveEntries �
     '}',
     '',
   ].join('\n');
-  const root = join(tmpdir(), 'rundeck-dupid');
+  const root = join(tmpdir(), 'run-deck-dupid');
   const document = coerceDocument(JSON.parse(stripJsonComments(text))).document;
   const ids = resolveEntries(root, document).map((entry) => entry.id);
   // resolveEntries 的规则：第二条的显式 id 被占用 → 从 **id 串**派生出 dup-2
@@ -1438,11 +1473,11 @@ await check('重复显式 id：删除定位用的 id 派生与 resolveEntries �
   assert.deepEqual(remaining[0].args, ['a'], '删掉的是第二条（不是界面 id 对不上的猜错那条）');
 });
 
-await check('空目录也能建第一条：没有 .dsh/run.json 时自动创建', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-firsttask-'));
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-firsttaskdata-'));
-  const manager = new RundeckManager({
+await check('空目录也能建第一条：没有 .dsh/run-deck/run.json 时自动创建', async () => {
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-firsttask-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-firsttaskdata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1455,7 +1490,7 @@ await check('空目录也能建第一条：没有 .dsh/run.json 时自动创建'
   // 空目录也是焦点：条一直在，只是没有按钮（不该变成"没有焦点"）
   const before = manager.state(dir);
   assert.equal(before.focused?.projectRoot, dir.replaceAll('\\', '/'));
-  assert.match(before.focused?.reason ?? '', /还没有 \.dsh\/run\.json/);
+  assert.match(before.focused?.reason ?? '', /这个目录还没有 \.dsh\/run-deck\/run\.json/);
   assert.deepEqual(before.buttons, []);
   assert.deepEqual(before.focusedEntries, []);
 
@@ -1463,8 +1498,8 @@ await check('空目录也能建第一条：没有 .dsh/run.json 时自动创建'
   const created = await manager.createTask(dir, { label: 'Hello', command: 'node -e console.log(1)' });
   assert.equal(created.ok, true);
   if (!created.ok) return;
-  const manifest = join(dir, '.dsh', 'run.json');
-  assert.ok(existsSync(manifest), '.dsh/run.json 要自动创建出来');
+  const manifest = join(dir, '.dsh', 'run-deck', 'run.json');
+  assert.ok(existsSync(manifest), '.dsh/run-deck/run.json 要自动创建出来');
   const parsed = JSON.parse(stripJsonComments(readFileSync(manifest, 'utf8')));
   assert.deepEqual(parsed.tasks[0], {
     label: 'Hello',
@@ -1476,18 +1511,18 @@ await check('空目录也能建第一条：没有 .dsh/run.json 时自动创建'
 });
 
 await check('新增条目：工作目录 / 环境变量 / 长驻 / 就绪正则 / 打开地址 全部落进清单', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-rich-task-'));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-rich-task-'));
   mkdirSync(join(dir, 'apps', 'web'), { recursive: true });
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  const manifestPath = join(dir, '.dsh', 'run.json');
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run-deck', 'run.json');
   writeFileSync(
     manifestPath,
     ['{', '  // 人写的注释', '  "version": "2.0.0",', '  "tasks": []', '}', ''].join('\n'),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-richtaskdata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-richtaskdata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1623,7 +1658,7 @@ await check('新增条目的字段校验：坏正则 / 不存在目录 / 坏变�
 
 await check('检测候选：读 package.json 的 scripts，猜包管理器 / 长驻 / 分组，并标出"已在清单"', async () => {
   const { detectTasks } = await import(new URL('../lib/detect.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-detect-'));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-detect-'));
   writeFileSync(
     join(dir, 'package.json'),
     JSON.stringify({
@@ -1662,7 +1697,7 @@ await check('检测候选：读 package.json 的 scripts，猜包管理器 / 长
   assert.ok(result.candidates.some((candidate) => candidate.source === 'template'));
 
   // 没有 package.json 的目录：**不是告警**，只是没有可检测的脚本；模板仍然在。
-  const empty = mkdtempSync(join(tmpdir(), 'rundeck-detect-empty-'));
+  const empty = mkdtempSync(join(tmpdir(), 'run-deck-detect-empty-'));
   const none = await detectTasks(empty, []);
   assert.equal(none.warnings.length, 0, '没有 package.json 是正常空状态，不该进告警');
   assert.ok(none.candidates.every((candidate) => candidate.source === 'template'));
@@ -1674,10 +1709,10 @@ await check('检测候选：读 package.json 的 scripts，猜包管理器 / 长
 });
 
 await check('界面删除条目：真的从 run.json 移除（含悬空 buttons[] 与本地覆盖）', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-deltask-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  const manifestPath = join(dir, '.dsh', 'run.json');
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-deltask-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run-deck', 'run.json');
   writeFileSync(
     manifestPath,
     [
@@ -1697,8 +1732,8 @@ await check('界面删除条目：真的从 run.json 移除（含悬空 buttons[
     ].join('\n'),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-deltaskdata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-deltaskdata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1729,11 +1764,11 @@ await check('界面删除条目：真的从 run.json 移除（含悬空 buttons[
 });
 
 await check('本地覆盖只改展示字段，写不进 command/args/cwd', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-btn-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [{ label: 'web', id: 'a/web', command: 'python', args: ['a.py'] }],
@@ -1741,8 +1776,8 @@ await check('本地覆盖只改展示字段，写不进 command/args/cwd', async
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btndata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-btndata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1772,11 +1807,11 @@ await check('本地覆盖只改展示字段，写不进 command/args/cwd', async
 });
 
 await check('buttons[] 指向不存在的条目时跳过并记告警', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-btn-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [{ label: 'web', id: 'a/web', command: 'python' }],
@@ -1784,9 +1819,9 @@ await check('buttons[] 指向不存在的条目时跳过并记告警', async () 
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btndata-'));
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-btndata-'));
   const runtime = fakeRuntime();
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: runtime.ctx,
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1802,11 +1837,11 @@ await check('buttons[] 指向不存在的条目时跳过并记告警', async () 
 });
 
 await check('本地覆盖写的是 <dataDir>/layout.json，可以读回', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-btn-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-btn-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({
       version: '2.0.0',
       tasks: [{ label: 'web', id: 'a/web', command: 'python' }],
@@ -1814,8 +1849,8 @@ await check('本地覆盖写的是 <dataDir>/layout.json，可以读回', async 
     }),
     'utf8',
   );
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-btndata-'));
-  const manager = new RundeckManager({
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-btndata-'));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1835,13 +1870,13 @@ await check('本地覆盖写的是 <dataDir>/layout.json，可以读回', async 
 
 /** 造一个带 manifest 的项目目录 + manager。 */
 async function makeManager(manifest, runtimeOptions = {}) {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-focus-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  writeFileSync(join(dir, '.dsh', 'run.json'), JSON.stringify(manifest, null, 2), 'utf8');
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-focusdata-'));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-focus-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-focusdata-'));
   const runtime = fakeRuntime(runtimeOptions);
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: runtime.ctx,
     version: '0.0.0',
     config: () => ({ dataDir, configPath: dir }),
@@ -1857,10 +1892,10 @@ async function makeManager(manifest, runtimeOptions = {}) {
 
 /** 造一个 manager，但不把项目目录指进去（模拟"没扫到"）。 */
 async function makeDetachedManager() {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-detached-'));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-detached-'));
   const runtime = fakeRuntime();
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: runtime.ctx,
     version: '0.0.0',
     config: () => ({ dataDir, configPath: '' }),
@@ -1975,10 +2010,10 @@ await check('正在跑的条目在按钮上带 active/status；停掉即消失',
 
 await check('focusCwd 让任意目录成为焦点（无需注册成工作区）', async () => {
   const manager = await makeDetachedManager();
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-anydir-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-anydir-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
   writeFileSync(
-    join(dir, '.dsh', 'run.json'),
+    join(dir, '.dsh', 'run-deck', 'run.json'),
     JSON.stringify({ version: '2.0.0', tasks: [{ label: 'x', id: 'x', command: 'python' }] }),
     'utf8',
   );
@@ -1993,13 +2028,13 @@ await check('focusCwd 让任意目录成为焦点（无需注册成工作区）'
 
 await check('focusCwd 对没有 manifest 的目录：仍是焦点，并说明原因', async () => {
   const manager = await makeDetachedManager();
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-empty-'));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-empty-'));
   const result = await manager.focusCwd(dir);
   assert.equal(result.ok, true);
   if (result.ok) {
     // 条要一直在：空目录也算焦点，`+` 才有地方建第一条（而不是"没有焦点"整条消失）
     assert.equal(result.focused.projectRoot, dir.replaceAll('\\', '/'));
-    assert.match(result.focused.reason ?? '', /还没有 \.dsh\/run\.json/);
+    assert.match(result.focused.reason ?? '', /这个目录还没有 \.dsh\/run-deck\/run\.json/);
   }
 });
 
@@ -2084,8 +2119,8 @@ async function callRoute(routes, path, query, options = {}) {
 }
 
 await check('sessionCwd 从 host 会话存储的 header.cwd 解析出工作目录', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const manager = new RundeckManager({
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const manager = new RunDeckManager({
     ctx: fakeSessionCtx({
       get: (id) => (id === 's1' ? { id: 's1', header: { cwd: 'D:/Flora/ProgramProjects/jin' } } : undefined),
     }),
@@ -2100,8 +2135,8 @@ await check('sessionCwd 从 host 会话存储的 header.cwd 解析出工作目�
 });
 
 await check('sessions 服务缺失时 sessionCwd 返回 null，不抛错', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const manager = new RundeckManager({
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: '' }),
@@ -2115,7 +2150,7 @@ await check('sessions 服务缺失时 sessionCwd 返回 null，不抛错', async
 /* ── 会话目录兜底：这是"重启后空闲会话没有按钮"的修复 ── */
 
 await check('空闲会话不在内存存储里时，sessionCwdAsync 退到会话目录（list）并只用对上号的那条', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const calls = { list: 0, inspect: 0 };
   const controller = {
     list: async () => {
@@ -2134,7 +2169,7 @@ await check('空闲会话不在内存存储里时，sessionCwdAsync 退到会话
       return { meta: { id }, events: [] };
     },
   };
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: fakeCatalogCtx({ sessions: { get: () => undefined, list: () => [] }, controller }),
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: '' }),
@@ -2157,7 +2192,7 @@ await check('空闲会话不在内存存储里时，sessionCwdAsync 退到会话
 });
 
 await check('目录 list 里没有 cwd 时退到 inspect，且取 meta.cwd 而不是事件里的 cwd', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   let inspected = 0;
   const controller = {
     list: async () => ({ items: [{ sessionId: 's9' }] }),
@@ -2167,7 +2202,7 @@ await check('目录 list 里没有 cwd 时退到 inspect，且取 meta.cwd 而�
       return { meta: { id, cwd: 'D:/Flora/ProgramProjects/tailtale' }, events: [{ cwd: 'D:/elsewhere' }] };
     },
   };
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: fakeCatalogCtx({ sessions: { get: () => undefined, list: () => [] }, controller }),
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: '' }),
@@ -2182,7 +2217,7 @@ await check('目录 list 里没有 cwd 时退到 inspect，且取 meta.cwd 而�
 });
 
 await check('内存存储里有这条会话时不读会话目录；目录抛错也只记告警', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   let listed = 0;
   const live = {
     get: (id) => (id === 's1' ? { id: 's1', header: { cwd: 'D:/live' } } : undefined),
@@ -2194,7 +2229,7 @@ await check('内存存储里有这条会话时不读会话目录；目录抛错�
       throw new Error('目录服务不可用');
     },
   };
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: fakeCatalogCtx({ sessions: live, controller }),
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: '' }),
@@ -2210,12 +2245,12 @@ await check('内存存储里有这条会话时不读会话目录；目录抛错�
 });
 
 await check('cwd 的来路与"没解析出来"各打一行日志（重启后为什么没按钮要能自查）', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const lines = [];
   const controller = {
     list: async () => ({ items: [{ sessionId: 'idle-1', cwd: 'D:/Flora/ProgramProjects/jin' }] }),
   };
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: fakeCatalogCtx({
       sessions: { get: (id) => (id === 's1' ? { id: 's1', header: { cwd: 'D:/live' } } : undefined), list: () => [] },
       controller,
@@ -2240,13 +2275,13 @@ await check('cwd 的来路与"没解析出来"各打一行日志（重启后为�
 });
 
 await check('/state?sessionId= 端到端：会话不在内存存储里（重启后的空闲会话）也能出按钮', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-idle-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  writeFileSync(join(dir, '.dsh', 'run.json'), JSON.stringify(MANIFEST_3), 'utf8');
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-idledata-'));
-  const manager = new RundeckManager({
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-idle-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), JSON.stringify(MANIFEST_3), 'utf8');
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-idledata-'));
+  const manager = new RunDeckManager({
     ctx: fakeCatalogCtx({
       // 内存会话存储是空的 = 重启后这条会话只是被"查看"，没有被激活
       sessions: { get: () => undefined, list: () => [] },
@@ -2266,31 +2301,31 @@ await check('/state?sessionId= 端到端：会话不在内存存储里（重启�
     trustedHosts: () => [],
     log: () => {},
   });
-  const st = await callRoute(routes, '/dsh-rundeck/api/state', '?sessionId=idle-1');
+  const st = await callRoute(routes, '/dsh-run-deck/api/state', '?sessionId=idle-1');
   assert.equal(st.focused.projectRoot, dir.replaceAll('\\', '/'));
   assert.equal(st.buttons.length, 3);
   // 没有会话 id 时仍然没有焦点（不是"随便猜一个项目"）
-  const bare = await callRoute(routes, '/dsh-rundeck/api/state', '');
+  const bare = await callRoute(routes, '/dsh-run-deck/api/state', '');
   assert.equal(bare.focused, null);
   assert.equal(bare.buttons.length, 0);
 });
 
 await check('ensureProject 把磁盘上的目录现读成项目（启动扫描为空也能用）', async () => {
   const manager = await makeDetachedManager();
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-ensure-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  writeFileSync(join(dir, '.dsh', 'run.json'), JSON.stringify(MANIFEST_3), 'utf8');
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-ensure-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), JSON.stringify(MANIFEST_3), 'utf8');
   assert.equal(manager.listProjects().length, 0);
   assert.equal(await manager.ensureProject(dir), true);
   assert.equal(manager.state(dir).buttons.length, 3);
   // 没有 manifest 的目录不追加，也不抛错
-  assert.equal(await manager.ensureProject(mkdtempSync(join(tmpdir(), 'rundeck-none-'))), false);
+  assert.equal(await manager.ensureProject(mkdtempSync(join(tmpdir(), 'run-deck-none-'))), false);
 });
 
-await check('清单被改过时自动重读（不用重启、也不用知道 /rundeck list 会重读）', async () => {
+await check('清单被改过时自动重读（不用重启、也不用知道 /run-deck list 会重读）', async () => {
   const logs = [];
   const { manager, dir, root } = await makeManager(MANIFEST_3, { logs });
-  const manifest = join(dir, '.dsh', 'run.json');
+  const manifest = join(dir, '.dsh', 'run-deck', 'run.json');
   assert.equal(manager.state(root).buttons.length, 3);
 
   // 改清单：换掉 buttons[]（只留一条），并把 mtime 往前推，保证与上次读到的不同
@@ -2317,23 +2352,23 @@ await check('清单被删掉时把过期的项目换掉（不再留旧按钮，�
   const { manager, dir, root } = await makeManager(MANIFEST_3);
   await manager.ensureProject(root);
   assert.equal(manager.state(root).buttons.length, 3);
-  rmSync(join(dir, '.dsh', 'run.json'));
+  rmSync(join(dir, '.dsh', 'run-deck', 'run.json'));
   await manager.ensureProject(root);
   const after = manager.state(root);
   assert.deepEqual(after.buttons, [], '文件没了就不该还留着上一次的按钮');
   assert.equal(after.focused.projectRoot, root, '目录本身还在，条也要在（+ 可以重新建条目）');
-  assert.match(after.focused.reason ?? '', /还没有 \.dsh\/run\.json/);
+  assert.match(after.focused.reason ?? '', /这个目录还没有 \.dsh\/run-deck\/run\.json/);
 });
 
 await check('/state?sessionId= 端到端：会话 → 项目 → 按钮（这是浮动条的主路径）', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
-  const dir = mkdtempSync(join(tmpdir(), 'rundeck-wire-'));
-  mkdirSync(join(dir, '.dsh'), { recursive: true });
-  writeFileSync(join(dir, '.dsh', 'run.json'), JSON.stringify(MANIFEST_3), 'utf8');
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-wiredata-'));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-wire-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), JSON.stringify(MANIFEST_3), 'utf8');
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-wiredata-'));
   // configPath 留空 = 模拟"启动时一个项目根目录都没扫到"（日志里的 0 个项目根目录）
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: fakeSessionCtx({ get: (id) => (id === 's1' ? { id: 's1', header: { cwd: dir } } : undefined) }),
     version: '0.0.0',
     config: () => ({ dataDir, configPath: '' }),
@@ -2350,30 +2385,30 @@ await check('/state?sessionId= 端到端：会话 → 项目 → 按钮（这是
     log: () => {},
   });
 
-  const withSession = await callRoute(routes, '/dsh-rundeck/api/state', '?sessionId=s1');
+  const withSession = await callRoute(routes, '/dsh-run-deck/api/state', '?sessionId=s1');
   assert.equal(withSession.focused.projectRoot, dir.replaceAll('\\', '/'));
   assert.equal(withSession.buttons.length, 3);
   assert.equal(withSession.focusedEntries.length, 3);
 
   // 不带任何参数 = 没有焦点，浮动层隐藏（切到没有 run.json 的目录就是这条）
-  const without = await callRoute(routes, '/dsh-rundeck/api/state', '');
+  const without = await callRoute(routes, '/dsh-run-deck/api/state', '');
   assert.equal(without.focused, null);
   assert.equal(without.buttons.length, 0);
 
   // ?cwd= 那条路仍然有效
   const byCwd = await callRoute(
     routes,
-    '/dsh-rundeck/api/state',
+    '/dsh-run-deck/api/state',
     `?cwd=${encodeURIComponent(dir)}`,
   );
   assert.equal(byCwd.buttons.length, 3);
 });
 
 await check('/ping 把客户端半边的诊断写进 host 日志', async () => {
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
   const lines = [];
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir: '', configPath: '' }),
@@ -2391,7 +2426,7 @@ await check('/ping 把客户端半边的诊断写进 host 日志', async () => {
   await ping.handle(
     {
       method: 'POST',
-      url: '/dsh-rundeck/api/ping',
+      url: '/dsh-run-deck/api/ping',
       headers: { host: '127.0.0.1:43120' },
       async *[Symbol.asyncIterator]() {
         yield Buffer.from(JSON.stringify({ stage: 'client-loaded' }), 'utf8');
@@ -2463,9 +2498,9 @@ await check('没有 sessionId 也能跑（执行缝不需要 Agent owner）；�
   await manager.stopRun(anonymous.runId);
 
   // 有项目、没有 subprocess 服务（原样告诉人"缺什么"，而不是假装在跑）
-  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
-  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-nosub-'));
-  const noSeam = new RundeckManager({
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-nosub-'));
+  const noSeam = new RunDeckManager({
     ctx: { get: () => undefined },
     version: '0.0.0',
     config: () => ({ dataDir, configPath: root }),
@@ -2650,4 +2685,5 @@ await check('tail 只留最近 200 行（输出面板要能看清"最近发生�
 
 console.log(`\n${passed} checks passed${failed > 0 ? `, ${failed} FAILED` : ''}`);
 if (failed > 0) process.exitCode = 1;
+
 

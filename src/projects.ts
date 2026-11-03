@@ -1,7 +1,7 @@
 /**
- * dsh-rundeck — 项目清单的读取。
+ * dsh-run-deck — 项目清单的读取。
  *
- * 落点约定：**项目根目录下的 `.dsh/run.json`**（不是 `.vscode/`）。
+ * 落点约定：**项目根目录下的 `.dsh/run-deck/run.json`**（不是 `.vscode/`）。
  * 借 VS Code 的词汇表，但不冒充 VS Code 能读它——所以放 `.dsh/` 而不是
  * 塞进 `.vscode/tasks.json` 让真 VS Code 也去解析（两边的 `type` 支持集不同）。
  *
@@ -28,11 +28,22 @@ import {
 export { ERROR_CODES };
 export type { ApiError } from './types.js';
 
-/** 清单在项目里的固定相对位置。 */
-export const MANIFEST_RELATIVE_PATH = ['.dsh', 'run.json'] as const;
+/** 清单在项目里的固定相对位置：`.dsh/run-deck/run.json`。带一层以本插件命名的
+ *  子目录，避免 `.dsh/` 这个公共工作区里其它插件的数据跟清单同名相撞。 */
+export const MANIFEST_RELATIVE_PATH = ['.dsh', 'run-deck', 'run.json'] as const;
 
 /** manifest 文件名（告警信息里用，避免字符串漂移）。 */
-export const MANIFEST_FILE = '.dsh/run.json';
+export const MANIFEST_FILE = '.dsh/run-deck/run.json';
+
+/**
+ * 旧版落点 `.dsh/run.json`：早期的项目内清单直接放在 `.dsh/` 根下，
+ * 文件名不带插件名，跟 DSH 公共工作区里其它插件的东西有撞名风险。
+ * 现读时仍然认它（读盘兜底），但响一声告警，请把文件挪到新位置。
+ */
+export const LEGACY_MANIFEST_RELATIVE_PATH = ['.dsh', 'run.json'] as const;
+
+/** 旧落点的文件名（告警信息里用）。 */
+export const LEGACY_MANIFEST_FILE = '.dsh/run.json';
 
 /**
  * 归一化项目根目录：统一用 `/`、折叠重复分隔符、去掉末尾分隔符。
@@ -287,8 +298,12 @@ export async function loadProject(root: string): Promise<{ project: RunProject; 
   // 整个插件内部一律用 `/` 分隔路径。Windows 上 `\` 也能用，但两种混着会出现
   // "同一个目录比较不相等"的怪事——所有入口都经过这里，所以在这里归一化。
   const normalizedRoot = normalizeRoot(root);
-  const file = join(normalizedRoot, ...MANIFEST_RELATIVE_PATH);
+  let file = join(normalizedRoot, ...MANIFEST_RELATIVE_PATH);
+  const legacyFile = join(normalizedRoot, ...LEGACY_MANIFEST_RELATIVE_PATH);
 
+  // 兜底：新位置没有但旧位置有 → 照旧位置的文件工作（读写都指向它），
+  // 同时响一声告警，请人把文件挪过去。不自动搬家：自动搬会和手改/diff 打架，
+  // 也可能把用户没注意到的多余副本悄悄藏起来。
   let exists = true;
   let mtimeMs: number | undefined;
   try {
@@ -297,6 +312,24 @@ export async function loadProject(root: string): Promise<{ project: RunProject; 
     mtimeMs = stats.mtimeMs;
   } catch {
     exists = false;
+  }
+  if (!exists) {
+    let legacyExists = true;
+    try {
+      const stats = await stat(legacyFile);
+      legacyExists = stats.isFile();
+      mtimeMs = stats.mtimeMs;
+    } catch {
+      legacyExists = false;
+    }
+    if (legacyExists) {
+      file = legacyFile;
+      warnings.push(
+        `还在旧位置的 ${LEGACY_MANIFEST_FILE}：本插件的新落点是 ${MANIFEST_FILE}；` +
+          '把文件挪过去后这里就能直接读。（旧位置仍继续可用，不会被自动搬走）',
+      );
+      exists = true;
+    }
   }
 
   const base: RunProject = {

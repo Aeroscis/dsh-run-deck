@@ -1,5 +1,5 @@
 /**
- * dsh-rundeck — 业务核心：清单加载 + run 登记 + 浮动按钮视图。
+ * dsh-run-deck — 业务核心：清单加载 + run 登记 + 浮动按钮视图。
  *
  * 约定：**公开方法一律返回 ApiResult，不抛错**，这样 routes.ts / commands.ts
  * 都能直接把结果序列化给调用方。
@@ -33,9 +33,9 @@ import {
   type LocalLayout,
   type NewTaskInput,
   type ResolvedEntry,
-  type RundeckCapabilities,
-  type RundeckConfig,
-  type RundeckState,
+  type RunDeckCapabilities,
+  type RunDeckConfig,
+  type RunDeckState,
   type RunProject,
   type RunRecord,
   type StartRunRequest,
@@ -209,7 +209,7 @@ export interface ManagerDeps {
   ctx: DshContext;
   /** host 半边的版本，写进 /state 供 UI 显示。 */
   version: string;
-  config: () => RundeckConfig;
+  config: () => RunDeckConfig;
   configSource: () => ConfigSource;
   log: (level: 'info' | 'warn' | 'error', message: string) => void;
 }
@@ -220,7 +220,7 @@ function failure(code: string, message: string, hint?: string): ApiError {
   return error;
 }
 
-export class RundeckManager {
+export class RunDeckManager {
   private readonly warnings: string[] = [];
 
   /** 内存里的 run 记录；只在本进程有效（没有 run.json 那种需要跨进程共享的状态）。 */
@@ -402,12 +402,12 @@ export class RundeckManager {
    * 项目根目录 = DSH 工作区 ∪ `configPath` 显式指的那一个。
    *
    * `configPath` 的两种合法形态（按磁盘事实分派，不猜）：
-   *   - 指向**目录**：按普通项目根目录处理，读 `<dir>/.dsh/run.json`
+   *   - 指向**目录**：按普通项目根目录处理，读 `<dir>/.dsh/run-deck/run.json`
    *   - 指向**文件**：它是一个清单文件本身，所在目录就是项目根目录
    *      （例如没有固定工作区时，把某处一份 run.json 直接指过来）
    *
    * 早先的版本假设它一定是"清单所在目录"并把最后一段当文件名去掉——那样
-   * 一个真实存在的 `<x>/.dsh/run.json` 会被读成 `<x>/.dsh/.dsh/run.json`，
+   * 一个真实存在的 `<x>/.dsh/run-deck/run.json` 会被读成 `<x>/.dsh/.dsh/run-deck/run.json`，
    * 永远找不到。现在按 isFile() 分派。
    */
   private async projectRoots(): Promise<string[]> {
@@ -459,21 +459,28 @@ export class RundeckManager {
       } else if (stats.isDirectory()) {
         roots.push(normalized);
       } else {
-        // 是一个文件：它所在的目录就是项目根目录。但**只有**当这个目录本身
-        // 带着 `.dsh/run.json` 结尾时才直接用它——否则它可能是仓库里另一个
-        // 名字的清单，那时项目根目录是它的祖父目录，读 `<grandparent>/.dsh/run.json`
-        // 仍然是错的。所以这里分两种情况，都用磁盘事实说话：
-        //   a) `<x>/.dsh/run.json`  → 项目根 = `<x>`
-        //   b) `<x>/my-tasks.json`  → 项目根 = `<x>`，但清单名不是 `run.json`，
-        //      本插件只认 `.dsh/run.json`，于是如实记一条告警并跳过它。
+        // 是一个文件：它所在的目录就是项目根目录。但**只有**当它带着本插件清单
+        // 的固定落点结尾时才直接用它——否则它可能是仓库里另一个名字的清单，那时
+        // 项目根目录是它的祖父目录，读 `<grandparent>` 下的清单仍然是错的。
+        // 所以这里分两种情况，都用磁盘事实说话：
+        //   a) `<x>/.dsh/run-deck/run.json`  → 项目根 = `<x>`（现行落点）
+        //   a') `<x>/.dsh/run.json`          → 项目根 = `<x>`（旧落点，读盘兼容）
+        //   b) `<x>/my-tasks.json`           → 项目根 = `<x>`，但清单名不对，
+        //      本插件只认 `.dsh/run-deck/run.json`，于是如实记一条告警并跳过它。
         const segments = dirname(normalized).split('/');
-        const last = segments[segments.length - 1];
-        if (last === '.dsh') {
-          roots.push(segments.slice(0, -1).join('/'));
+        const lastTwo = segments.slice(-2);
+        const isUnderDsh = lastTwo[lastTwo.length - 1] === '.dsh';
+        const isCurrentManifest =
+          lastTwo[lastTwo.length - 1] === 'run-deck' && lastTwo[0] === '.dsh';
+        if (isUnderDsh || isCurrentManifest) {
+          // 旧落点是 `.dsh/x` 的父级；新落点是 `.dsh/run-deck/x` 的祖父级。
+          const rootDepth = isUnderDsh ? 1 : 2;
+          const rootSegments = segments.slice(0, -rootDepth);
+          roots.push(rootSegments.length > 1 ? rootSegments.join('/') : rootSegments[0] ?? '');
         } else {
           this.recordWarning(
-            `configPath 指向 ${configPath}，但本插件只认项目根目录下的 .dsh/run.json；` +
-              '请把它改成项目根目录（或指向 <项目根>/.dsh/run.json）。',
+            `configPath 指向 ${configPath}，但本插件只认项目根目录下的 .dsh/run-deck/run.json；` +
+              '请把它改成项目根目录（或指向 <项目根>/.dsh/run-deck/run.json）。',
           );
         }
       }
@@ -1032,7 +1039,7 @@ export class RundeckManager {
           ? {
               reason:
                 known.configFile === undefined
-                  ? '这个目录还没有 .dsh/run.json'
+                  ? '这个目录还没有 .dsh/run-deck/run.json'
                   : '这个目录下没有可用条目',
             }
           : {}),
@@ -1126,9 +1133,9 @@ export class RundeckManager {
    * 两条规则：
    *   - **只有真的读到条目才追加进 this.projects**：一个没有 manifest 的目录不该
    *     被记成"已加载项目"，否则下次刷新又会把它算进去、还可能在 warnings 里重复出现。
-   *   - 已经加载过的项目要**看一眼 mtime**：改了 `.dsh/run.json`（改 pattern、加按钮）
+   *   - 已经加载过的项目要**看一眼 mtime**：改了 `.dsh/run-deck/run.json`（改 pattern、加按钮）
    *     之后下一轮 `/state`（≤2.5s）就生效，不需要重启 DSH，也不需要知道
-   *     `/rundeck list` 会顺手重读。实测这条是刚需——改完清单发现界面还是旧的，
+   *     `/run-deck list` 会顺手重读。实测这条是刚需——改完清单发现界面还是旧的，
    *     人只会以为"插件没生效"。
    */
   private async loadFocusedProject(root: string): Promise<RunProject | undefined> {
@@ -1166,7 +1173,7 @@ export class RundeckManager {
   }
 
   /**
-   * 界面新建一条启动项：**真的写进项目的 `.dsh/run.json`**（不是本地覆盖）。
+   * 界面新建一条启动项：**真的写进项目的 `.dsh/run-deck/run.json`**（不是本地覆盖）。
    *
    * 这是"手改和界面都能加"的那半边。两条路写的是**同一个文件**，因此：
    *   - 界面创建的条目和手写进去的完全等价（可见、可 diff、能被别人 clone）；
@@ -1219,7 +1226,7 @@ export class RundeckManager {
         try {
           text = await readFile(target, 'utf8');
         } catch (error) {
-          return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
+          return failure(ERROR_CODES.fs, '读不了 .dsh/run-deck/run.json', String(error));
         }
       }
       const inserted = insertTaskIntoManifestText(text, task);
@@ -1228,7 +1235,7 @@ export class RundeckManager {
       try {
         await this.writeManifestAtomically(target, inserted.text);
       } catch (error) {
-        return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
+        return failure(ERROR_CODES.fs, '写不了 .dsh/run-deck/run.json', String(error));
       }
 
       const { project: reloaded } = await loadProject(project.root);
@@ -1238,7 +1245,7 @@ export class RundeckManager {
       ];
       this.deps.log(
         'info',
-        `界面新建条目：${project.root} → ${id}（${task.label}）${creatingManifest ? '（新建了 .dsh/run.json）' : ''}`,
+        `界面新建条目：${project.root} → ${id}（${task.label}）${creatingManifest ? '（新建了 .dsh/run-deck/run.json）' : ''}`,
       );
       return { ok: true, entry: id, projectRoot: project.root };
     });
@@ -1265,7 +1272,7 @@ export class RundeckManager {
   }
 
   /**
-   * 界面删除一条启动项：**真的从项目的 `.dsh/run.json` 的 `tasks[]` 里移除**，
+   * 界面删除一条启动项：**真的从项目的 `.dsh/run-deck/run.json` 的 `tasks[]` 里移除**，
    * 连带清掉 `buttons[]` 里指向它的声明、以及本机布局里对它的覆盖。
    *
    * 这是 `createTask` 的对称操作——两条路编辑的仍是同一个源文件，所以"界面删掉"
@@ -1280,7 +1287,7 @@ export class RundeckManager {
     return this.withManifestLock(join(root, ...MANIFEST_RELATIVE_PATH), async () => {
       const project = this.projects.find((candidate) => samePath(candidate.root, root));
       if (project === undefined || project.configFile === undefined) {
-        return failure(ERROR_CODES.notFound, '这个项目还没有可编辑的 .dsh/run.json');
+        return failure(ERROR_CODES.notFound, '这个项目还没有可编辑的 .dsh/run-deck/run.json');
       }
       const manifestPath = project.configFile;
 
@@ -1288,7 +1295,7 @@ export class RundeckManager {
       try {
         text = await readFile(manifestPath, 'utf8');
       } catch (error) {
-        return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
+        return failure(ERROR_CODES.fs, '读不了 .dsh/run-deck/run.json', String(error));
       }
       const removed = removeTaskFromManifestText(text, entryId);
       if (!removed.ok) return failure(ERROR_CODES.badRequest, removed.message);
@@ -1296,7 +1303,7 @@ export class RundeckManager {
       try {
         await this.writeManifestAtomically(manifestPath, removed.text);
       } catch (error) {
-        return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
+        return failure(ERROR_CODES.fs, '写不了 .dsh/run-deck/run.json', String(error));
       }
 
       // 本机布局里对它的覆盖也清掉，免得留一个指向已删条目的孤儿键。
@@ -1386,7 +1393,7 @@ export class RundeckManager {
 
   /* ─────────────────────────── 状态 ─────────────────────────── */
 
-  capabilities(): RundeckCapabilities {
+  capabilities(): RunDeckCapabilities {
     const subprocess = probeSubprocess(this.deps.ctx);
     const controller = this.deps.ctx.get<DshSessionControllerService>('sessionController');
     const openPath = this.deps.ctx.get<DshOpenPathService>('openPath');
@@ -1408,7 +1415,7 @@ export class RundeckManager {
    * @param cwd 客户端报上来的当前会话工作目录；缺省 = 没有焦点项目，
    *            `buttons` / `focusedEntries` 都为空（浮动层整条隐藏）。
    */
-  state(cwd?: string): RundeckState {
+  state(cwd?: string): RunDeckState {
     const projects = this.listProjects();
     const focused = cwd === undefined ? null : this.focusProject(cwd);
     const projectRoot = focused?.projectRoot ?? null;
@@ -1463,7 +1470,7 @@ export class RundeckManager {
           ? {
               reason:
                 project.configFile === undefined
-                  ? '这个目录还没有 .dsh/run.json'
+                  ? '这个目录还没有 .dsh/run-deck/run.json'
                   : '这个目录下没有可用条目',
             }
           : {}),

@@ -4,9 +4,9 @@
 
 ---
 
-你是接手一个已有项目的工程师。项目在 `D:\Flora\ProgramProjects\dsh-rundeck`，
-它是 DSH（一个 AI 编程工具的桌面版）的一个插件，名字叫 `dsh-rundeck`，作用是：
-**读取每个项目里的 `.dsh/run.json`，在 DSH 输入框上方画一条浮动按钮条，点一下就能跑/停那个项目里声明的启动命令（比如启动一个 web 服务、构建、跑测试）。**
+你是接手一个已有项目的工程师。项目在 `D:\Flora\ProgramProjects\dsh-run-deck`，
+它是 DSH（一个 AI 编程工具的桌面版）的一个插件，名字叫 `dsh-run-deck`，作用是：
+**读取每个项目里的 `.dsh/run-deck/run.json`，在 DSH 输入框上方画一条浮动按钮条，点一下就能跑/停那个项目里声明的启动命令（比如启动一个 web 服务、构建、跑测试）。**
 
 ## 用户是谁、怎么跟他说话
 
@@ -35,8 +35,8 @@
 
 ### 相关两个项目
 
-- 插件本体：`D:\Flora\ProgramProjects\dsh-rundeck`（`src/` 是源码，`lib/` 和 `client/client.js` 是构建产物）
-- 用户自己的示例项目：`D:\Flora\ProgramProjects\jin`，配置在 `D:\Flora\ProgramProjects\jin\.dsh\run.json`，里面三条命令 + 三个按钮：
+- 插件本体：`D:\Flora\ProgramProjects\dsh-run-deck`（`src/` 是源码，`lib/` 和 `client/client.js` 是构建产物）
+- 用户自己的示例项目：`D:\Flora\ProgramProjects\jin`，配置在 `D:\Flora\ProgramProjects\jin\.dsh/run-deck/run.json`，里面三条命令 + 三个按钮：
   - `jin · web`（id `jin/web`）：`python start_gallery_web.py --port 5180 --no-browser`，起画廊的 dev 服务
   - `jin · desktop`（id `jin/desktop`）：`python start_gallery_desktop.py`，起桌面版
   - `jin · web (build)`（id `jin/web-build`）：`python start_gallery_web.py --build --no-browser`，先构建再起 preview 服务
@@ -81,13 +81,13 @@
 ### 「没有输出窗口」这件事的事实
 
 - 这条路用的是「不显示任何窗口」的隐藏命令行窗口（当初还专门写了个探针 `_probe/run/ptywindow.mjs` 确认桌面上不会冒窗口）。
-- `.dsh/run.json` 里那个 `presentation: { panel, reveal }`（写着"专用面板、总是显示"）**是个死字段**：解析了（`src/config.ts` 约 215~223 行），但界面上没有任何地方读它。
+- `.dsh/run-deck/run.json` 里那个 `presentation: { panel, reveal }`（写着"专用面板、总是显示"）**是个死字段**：解析了（`src/config.ts` 约 215~223 行），但界面上没有任何地方读它。
 - 输出其实**有**出口，但很窄：只把**最近 6 行**存进记录（`src/manager.ts` 约 109 行），只在那个齿轮 ⚙ 面板里显示（`src/client.tsx` 约 1732 行）。README 的前一版交接里自己写着「未做：完整输出面板（现在只有最近 6 行）」。
 - 宿主的日志只记关键事件（起/停/就绪/告警），**不逐行记脚本输出**。
 
 ## 别破的硬约束（改代码时必须守）
 
-1. **命令只能来自项目里的 `.dsh/run.json` 字面量**。接口只接受 `{项目路径, entry id}` 这样的"指针"，绝不接受自由命令，也不扫目录找可执行文件。
+1. **命令只能来自项目里的 `.dsh/run-deck/run.json` 字面量**。接口只接受 `{项目路径, entry id}` 这样的"指针"，绝不接受自由命令，也不扫目录找可执行文件。
 2. **进程必须由宿主的 `subprocess` 服务持有**（它开的是隐藏 PTY）。这是为了：Ctrl+C 能真的送进进程组（脚本的清尾代码才会跑），以及插件卸载/宿主退出时它会把整棵进程树收掉。已经踩过的坑：进程脱离监管后，脚本退了但 `vite preview` 还活着，端口一直被占。
 3. 破坏性操作要有确认；不要把界面变成"无确认执行任意脚本"的通路。
 
@@ -120,7 +120,7 @@
 
 ## 环境备注
 
-- 系统 Windows，插件在桌面 profile 里是 `link:` 依赖（`~/.dsh/profiles/desktop/node_modules/@aeroscis/dsh-rundeck` 指向源码目录）：改 `lib/`（宿主那半）需要重载插件/重启宿主才生效，改客户端那半重建后刷新页面即可。
+- 系统 Windows，插件在桌面 profile 里是 `link:` 依赖（`~/.dsh/profiles/desktop/node_modules/@aeroscis/dsh-run-deck` 指向源码目录）：改 `lib/`（宿主那半）需要重载插件/重启宿主才生效，改客户端那半重建后刷新页面即可。
 - 想直接 curl 插件的 HTTP 接口是**行不通**的：桌面版只允许带特殊标记的界面请求，普通请求会 403（`desktopBrowserAccess`）。要查状态就看宿主日志或界面本身。
 
 ---

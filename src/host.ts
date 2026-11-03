@@ -1,11 +1,11 @@
 /**
- * dsh-rundeck — host half（Cordis 插件入口）。
+ * dsh-run-deck — host half（Cordis 插件入口）。
  *
  * 组成：
- *   - RundeckManager : 清单加载、run 登记、浮动按钮视图
+ *   - RunDeckManager : 清单加载、run 登记、浮动按钮视图
  *   - exec.ts        : 执行通道探测（终端路线，见那里的边界说明）
- *   - commands       : /rundeck list|run|stop|rerun|path|help
- *   - routes         : /dsh-rundeck/api/*（client half 的唯一数据通道）
+ *   - commands       : /run-deck list|run|stop|rerun|path|help
+ *   - routes         : /dsh-run-deck/api/*（client half 的唯一数据通道）
  *
  * 依赖策略：**全部使用可选服务**（`ctx.get` + 缺失即降级），不 declare inject，
  * 这样任一服务缺失时插件仍能加载，并在 UI 里如实显示能力缺失，而不是静默不工作。
@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 
-import { createRundeckCommand } from './commands.js';
+import { createRunDeckCommand } from './commands.js';
 import {
   buildLegacySchema,
   configFileIn,
@@ -24,16 +24,16 @@ import {
 } from './host-config.js';
 import { API_PREFIX, createRoutes, type RouteHost } from './routes.js';
 import { messageOf, openPathInFileManager } from './sessions.js';
-import { registerRundeckTool } from './tool.js';
-import { RundeckManager } from './manager.js';
+import { registerRunDeckTool } from './tool.js';
+import { RunDeckManager } from './manager.js';
 import {
   ERROR_CODES,
   type ApiResult,
   type ConfigSource,
-  type RundeckConfig,
+  type RunDeckConfig,
 } from './types.js';
 
-export const name = 'dsh-rundeck';
+export const name = 'dsh-run-deck';
 
 /**
  * 版本**现读 `package.json`**，不手写常量（手写的版本号一定会漂——
@@ -70,7 +70,7 @@ export const Config =
         dataDir: schemastery
           .string()
           .default('')
-          .description('插件数据目录；留空 = <DSH_HOME>/plugin-data/dsh-rundeck'),
+          .description('插件数据目录；留空 = <DSH_HOME>/plugin-data/dsh-run-deck'),
         configPath: schemastery
           .string()
           .default('')
@@ -90,7 +90,7 @@ export function readField(value: unknown): unknown {
 }
 
 /** 把行配置拍平成普通对象；类型收敛交给 normalizeConfigInput。 */
-export function rowConfigNow(raw: unknown): Partial<RundeckConfig> | undefined {
+export function rowConfigNow(raw: unknown): Partial<RunDeckConfig> | undefined {
   if (raw === null || typeof raw !== 'object') return undefined;
   const fields = raw as Record<string, unknown>;
   return {
@@ -112,20 +112,20 @@ export function apply(ctx: DshContext, config?: unknown): void {
     if (logger === undefined) return;
     const write = logger[level] ?? logger.info;
     try {
-      write?.call(logger, `[dsh-rundeck] ${message}`);
+      write?.call(logger, `[dsh-run-deck] ${message}`);
     } catch {
       /* 日志失败绝不影响业务 */
     }
   };
 
   /* ── 配置状态（0.2.0 起字段是活引用：值在「读」的那一刻才取） ── */
-  let currentConfig: RundeckConfig = normalizeConfigInput(initialRowConfig);
+  let currentConfig: RunDeckConfig = normalizeConfigInput(initialRowConfig);
   let currentSource: ConfigSource = initialRowConfig === undefined ? 'defaults' : 'cordis-row';
   let settingsScope: DshSettingsScope | undefined;
   let settingsReady = false;
-  let fileConfig: Partial<RundeckConfig> | undefined;
+  let fileConfig: Partial<RunDeckConfig> | undefined;
 
-  function computeConfig(): RundeckConfig {
+  function computeConfig(): RunDeckConfig {
     const row = rowConfigNow(rowInput) ?? {};
     const host = settingsScopeValue() ?? fileConfig;
     return normalizeConfigInput(host === undefined ? row : { ...row, ...host });
@@ -134,7 +134,7 @@ export function apply(ctx: DshContext, config?: unknown): void {
   /* ── 持久化与业务核心 ── */
   const mounted = { webServer: false, commands: false };
 
-  const manager = new RundeckManager({
+  const manager = new RunDeckManager({
     ctx,
     version,
     config: () => currentConfig,
@@ -209,29 +209,29 @@ export function apply(ctx: DshContext, config?: unknown): void {
           log('warn', `配置热更新处理失败：${messageOf(error)}`);
         });
       }),
-    'dsh-rundeck: volatile config',
+    'dsh-run-deck: volatile config',
   );
 
-  /* ── /rundeck 命令 ── */
+  /* ── /run-deck 命令 ── */
   ctx.inject(['commands'], (sctx) => {
     const commands = sctx.get<DshCommandsService>('commands');
     if (commands === undefined) return;
-    const dispose = commands.register(createRundeckCommand({ manager, ready }));
+    const dispose = commands.register(createRunDeckCommand({ manager, ready }));
     mounted.commands = true;
-    log('info', '已注册 /rundeck 命令');
-    sctx.effect(() => dispose, 'dsh-rundeck: /rundeck command');
+    log('info', '已注册 /run-deck 命令');
+    sctx.effect(() => dispose, 'dsh-run-deck: /run-deck command');
   });
 
-  /* ── rundeck 工具（第 4 步：外部按 id 调用）──
+  /* ── run-deck 工具（第 4 步：外部按 id 调用）──
    * 与命令调同一个 manager，不另起一套逻辑。`@deepseek-ai/dsh-tools` 是可选依赖：
    * 拿不到时只少一个入口，插件的其余部分照常工作。 */
   ctx.inject(['tools'], (sctx) => {
     const tools = sctx.get<DshToolsService>('tools');
     if (tools === undefined) return;
-    void registerRundeckTool(sctx, manager, ready, (level, message) => log(level, message)).then(
+    void registerRunDeckTool(sctx, manager, ready, (level, message) => log(level, message)).then(
       (result) => {
         if (result.mounted) return;
-        log('warn', `rundeck 工具未注册：${result.reason ?? '原因未知'}`);
+        log('warn', `run-deck 工具未注册：${result.reason ?? '原因未知'}`);
       },
     );
   });
@@ -265,17 +265,17 @@ export function apply(ctx: DshContext, config?: unknown): void {
       () => () => {
         for (const dispose of disposers) dispose();
       },
-      'dsh-rundeck: http routes',
+      'dsh-run-deck: http routes',
     );
   });
 
   /* ─────────────────────── 内部实现 ─────────────────────── */
 
-  function settingsScopeValue(): Partial<RundeckConfig> | undefined {
+  function settingsScopeValue(): Partial<RunDeckConfig> | undefined {
     if (settingsScope === undefined) return undefined;
     const value = settingsScope.get();
     return value !== null && typeof value === 'object' && !Array.isArray(value)
-      ? (value as Partial<RundeckConfig>)
+      ? (value as Partial<RunDeckConfig>)
       : undefined;
   }
 
@@ -326,7 +326,7 @@ export function apply(ctx: DshContext, config?: unknown): void {
       () => () => {
         settingsScope?.dispose?.();
       },
-      'dsh-rundeck: settings scope',
+      'dsh-run-deck: settings scope',
     );
   }
 
@@ -344,7 +344,7 @@ export function apply(ctx: DshContext, config?: unknown): void {
    * 三条路按宿主能力选，与 dsh-temptask 一致：`configEditor.edit()` →
    * settings 命名空间（拒绝并指路）→ config.json 降级通道。
    */
-  async function writeConfig(patch: Partial<RundeckConfig>): Promise<ApiResult<{ config: RundeckConfig }>> {
+  async function writeConfig(patch: Partial<RunDeckConfig>): Promise<ApiResult<{ config: RunDeckConfig }>> {
     if (settingsReady) {
       return {
         ok: false,
@@ -372,7 +372,7 @@ export function apply(ctx: DshContext, config?: unknown): void {
     try {
       const file = configFileIn(currentConfig.dataDir);
       const existing = (await readConfigFile(file)) ?? {};
-      const merged: Partial<RundeckConfig> = { ...(rowConfigNow(rowInput) ?? {}), ...existing, ...patch };
+      const merged: Partial<RunDeckConfig> = { ...(rowConfigNow(rowInput) ?? {}), ...existing, ...patch };
       await writeJsonAtomic(file, merged);
       fileConfig = merged;
       currentConfig = computeConfig();

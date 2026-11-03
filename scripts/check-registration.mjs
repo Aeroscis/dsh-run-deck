@@ -1,5 +1,5 @@
 /**
- * dsp-rundeck — 宿主装载自检。
+ * dsh-run-deck — 宿主装载自检。
  *
  * 不启动 DSH，只静态核对「这个包被宿主加载时会需要的每一样东西」：
  *   1. package.json 的 main / exports / dsh.bundle.patch 指向的文件都在且被 files 覆盖
@@ -34,7 +34,7 @@ async function loadHost() {
   return import(url.href);
 }
 
-console.log('dsh-rundeck registration smoke');
+console.log('dsh-run-deck registration smoke');
 
 const host = await loadHost();
 
@@ -43,10 +43,10 @@ check('lib/index.js 导出 apply（宿主挂载入口）', () => {
 });
 
 check('name 与包名对应（宿主按它当插件身份）', () => {
-  // 导出的是短名 'dsh-rundeck'，包名是 '@aeroscis/dsh-rundeck'。
+  // 导出的是短名 'dsh-run-deck'，包名是 '@aeroscis/dsh-run-deck'。
   // 宿主侧实际按 package.json 的 name 装载；这里核的是导出值稳定、且与
   // cordis.patch.yml 的行 id 一致（那一行才是宿主真正认的身份）。
-  assert.equal(host.name, 'dsh-rundeck');
+  assert.equal(host.name, 'dsh-run-deck');
 });
 
 check('version 与 package.json 一致', () => {
@@ -60,7 +60,7 @@ check('inject 是数组且为空（全部依赖按可选读取）', () => {
 
 check('default 导出同样带 name/version/inject/apply（两种加载形态都要能读）', () => {
   assert.equal(typeof host.default?.apply, 'function');
-  assert.equal(host.default?.name, 'dsh-rundeck');
+  assert.equal(host.default?.name, 'dsh-run-deck');
   assert.equal(host.default?.version, pkg.version);
   assert.deepEqual([...(host.default?.inject ?? [])], []);
 });
@@ -68,7 +68,7 @@ check('default 导出同样带 name/version/inject/apply（两种加载形态都
 check('cordis.patch.yml 的行 id 与 host.name 一致', () => {
   const patch = readFileSync(join(root, 'cordis.patch.yml'), 'utf8');
   assert.ok(
-    patch.includes(`- id: ${host.name}`) || patch.includes('- id: dsh-rundeck'),
+    patch.includes(`- id: ${host.name}`) || patch.includes('- id: dsh-run-deck'),
     'patch 里找不到与 host.name 一致的行 id',
   );
   assert.ok(patch.includes(`name: '${pkg.name}'`), 'patch 里的包名与 package.json 不一致');
