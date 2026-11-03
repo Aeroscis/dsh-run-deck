@@ -10,7 +10,7 @@
  * （见那里的边界说明）；就绪钩子的语义在 hooks.ts。
  */
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { probeSubprocess, renderCommandLine, resolveRunRoute, signalRunTerminal, killRunTerminal, spawnRunTerminal, tapRunTerminal, transition, type TerminalTap } from './exec.js';
@@ -256,6 +256,47 @@ export class RundeckManager {
   private layoutMtimeMs: number | undefined;
 
   private refreshing: Promise<RunProject[]> | undefined;
+
+  /**
+   * 清单写入的串行锁：按清单路径排队 Promise 链。
+   *
+   * "读 → 改写 → rename"绝不接受交错——同一个清单上两个请求（界面新建 × 2、
+   * 一个建一个删）都从旧文本出发各自插入，后写者会把先写者整条吞掉。
+   * 把整个读改写过程排进同一把锁后，后进者**先看到前者的写入结果**再动手。
+   */
+  private readonly manifestLocks = new Map<string, Promise<unknown>>();
+
+  /** 一个请求独占某份清单的读改写；前一个失败不应断掉排在自己后面的队列。 */
+  private withManifestLock<T>(manifestPath: string, work: () => Promise<T>): Promise<T> {
+    const key = normalizeForCompare(manifestPath);
+    const queued = this.manifestLocks.get(key) ?? Promise.resolve();
+    const run = queued.then(work, work);
+    // 后来的排队者要接在 run 的**吞错尾巴**上——rejection 不许传给下一次 then。
+    const tail = run.catch(() => undefined);
+    this.manifestLocks.set(key, tail);
+    // 落定时若“队尾还是自己”，把 key 摘掉；有后继者会先覆盖，比对就不成立。
+    void tail.then(() => {
+      if (this.manifestLocks.get(key) === tail) this.manifestLocks.delete(key);
+    });
+    return run;
+  }
+
+  /** 清单的原子写：唯一临时文件 + rename。临时文件名唯一，两个并发写不踩同一个。 */
+  private async writeManifestAtomically(manifestPath: string, text: string): Promise<void> {
+    // 新清单可能要连 `.dsh/` 一起建出来。
+    await mkdir(dirname(manifestPath), { recursive: true });
+    // 固定 `.tmp` 名在两个并发写时会被互相覆盖（甚至交叉写坏）；带随机尾巴，
+    // 这里的调用都被 withManifestLock 串行化了，随机尾巴只是防外部进程同写。
+    const temp = `${manifestPath}.${randomBytes(4).toString('hex')}.tmp`;
+    try {
+      await writeFile(temp, text, 'utf8');
+      await rename(temp, manifestPath);
+    } catch (error) {
+      // rename 没到、临时文件一定会留残渣（清理失败也只算垃圾文件，不该盖错误）。
+      await rm(temp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
 
   constructor(private readonly deps: ManagerDeps) {
     this.layoutFile = layoutFileIn(deps.config().dataDir);
@@ -1142,63 +1183,65 @@ export class RundeckManager {
     input: NewTaskInput,
   ): Promise<ApiResult<{ entry: string; projectRoot: string }>> {
     const root = normalizeRoot(projectRoot);
-    // 项目可能还没登记（比如会话 cwd 现读出来的空目录）：这里自己兜一次。
-    let project = this.projects.find((candidate) => samePath(candidate.root, root));
-    if (project === undefined) {
-      if (!(await directoryExists(root))) {
-        return failure(ERROR_CODES.notFound, '这个目录不存在', root);
+    // 锁键取"标准位置的清单路径"：configFile 还不存在时也是同一个落点，
+    // 于是「建第一条」与「已有清单上建第二条」排的是同一把锁。
+    const manifestPath = join(root, ...MANIFEST_RELATIVE_PATH);
+    // 整个读改写（含 id 撞车校验所依据的 entries）都在锁里，两个并发新建不会
+    // 从同一份旧文本出发各插一条：后进者在锁里先看到前者的写入结果。
+    return this.withManifestLock(manifestPath, async () => {
+      // 项目可能还没登记（比如会话 cwd 现读出来的空目录）：这里自己兜一次。
+      let project = this.projects.find((candidate) => samePath(candidate.root, root));
+      if (project === undefined) {
+        if (!(await directoryExists(root))) {
+          return failure(ERROR_CODES.notFound, '这个目录不存在', root);
+        }
+        project = (await loadProject(root)).project;
+        this.projects = [...this.projects.filter((c) => !samePath(c.root, root)), project];
       }
-      project = (await loadProject(root)).project;
-      this.projects = [...this.projects.filter((c) => !samePath(c.root, root)), project];
-    }
 
-    const built = await buildTaskEntry(input, {
-      root: project.root,
-      entries: project.entries,
-      directoryExists,
-    });
-    if (!built.ok) return built;
-    const task = built.task;
-    const id = built.entryId;
+      const built = await buildTaskEntry(input, {
+        root: project.root,
+        entries: project.entries,
+        directoryExists,
+      });
+      if (!built.ok) return built;
+      const task = built.task;
+      const id = built.entryId;
 
-    // 还没有清单时**顺手把清单建出来**：这是"不想手写配置文件"的唯一出路，
-    // 否则第一条启动项永远没有落笔的地方。
-    const manifestPath = project.configFile ?? join(root, ...MANIFEST_RELATIVE_PATH);
-    const creatingManifest = project.configFile === undefined;
-    let text: string;
-    if (creatingManifest) {
-      text = '{\n  "version": "2.0.0"\n}\n';
-    } else {
+      // 还没有清单时**顺手把清单建出来**：这是"不想手写配置文件"的唯一出路，
+      // 否则第一条启动项永远没有落笔的地方。
+      const target = project.configFile ?? manifestPath;
+      const creatingManifest = project.configFile === undefined;
+      let text: string;
+      if (creatingManifest) {
+        text = '{\n  "version": "2.0.0"\n}\n';
+      } else {
+        try {
+          text = await readFile(target, 'utf8');
+        } catch (error) {
+          return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
+        }
+      }
+      const inserted = insertTaskIntoManifestText(text, task);
+      if (!inserted.ok) return failure(ERROR_CODES.fs, inserted.message);
+
       try {
-        text = await readFile(manifestPath, 'utf8');
+        await this.writeManifestAtomically(target, inserted.text);
       } catch (error) {
-        return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
+        return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
       }
-    }
-    const inserted = insertTaskIntoManifestText(text, task);
-    if (!inserted.ok) return failure(ERROR_CODES.fs, inserted.message);
 
-    try {
-      // 新清单可能要连 `.dsh/` 一起建出来。
-      await mkdir(dirname(manifestPath), { recursive: true });
-      // 原子写：先写临时文件再 rename，避免半截清单被别的进程读到。
-      const temp = `${manifestPath}.tmp`;
-      await writeFile(temp, inserted.text, 'utf8');
-      await rename(temp, manifestPath);
-    } catch (error) {
-      return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
-    }
-
-    const { project: reloaded } = await loadProject(project.root);
-    this.projects = [
-      ...this.projects.filter((candidate) => !samePath(candidate.root, project.root)),
-      reloaded,
-    ];
-    this.deps.log(
-      'info',
-      `界面新建条目：${project.root} → ${id}（${task.label}）${creatingManifest ? '（新建了 .dsh/run.json）' : ''}`,
-    );
-    return { ok: true, entry: id, projectRoot: project.root };
+      const { project: reloaded } = await loadProject(project.root);
+      this.projects = [
+        ...this.projects.filter((candidate) => !samePath(candidate.root, project.root)),
+        reloaded,
+      ];
+      this.deps.log(
+        'info',
+        `界面新建条目：${project.root} → ${id}（${task.label}）${creatingManifest ? '（新建了 .dsh/run.json）' : ''}`,
+      );
+      return { ok: true, entry: id, projectRoot: project.root };
+    });
   }
 
   /**
@@ -1234,54 +1277,55 @@ export class RundeckManager {
     entryId: string,
   ): Promise<ApiResult<{ entry: string; projectRoot: string }>> {
     const root = normalizeRoot(projectRoot);
-    const project = this.projects.find((candidate) => samePath(candidate.root, root));
-    if (project === undefined || project.configFile === undefined) {
-      return failure(ERROR_CODES.notFound, '这个项目还没有可编辑的 .dsh/run.json');
-    }
-    const manifestPath = project.configFile;
-
-    let text: string;
-    try {
-      text = await readFile(manifestPath, 'utf8');
-    } catch (error) {
-      return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
-    }
-    const removed = removeTaskFromManifestText(text, entryId);
-    if (!removed.ok) return failure(ERROR_CODES.badRequest, removed.message);
-
-    try {
-      const temp = `${manifestPath}.tmp`;
-      await writeFile(temp, removed.text, 'utf8');
-      await rename(temp, manifestPath);
-    } catch (error) {
-      return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
-    }
-
-    // 本机布局里对它的覆盖也清掉，免得留一个指向已删条目的孤儿键。
-    if (this.layout.buttons[entryId] !== undefined) {
-      const buttons = { ...this.layout.buttons };
-      delete buttons[entryId];
-      const next: LocalLayout = { buttons, ...pickDensity(this.layout.density) };
-      try {
-        await writeLayout(this.layoutFile, next);
-        this.layout = next;
-        this.layoutMtimeMs = undefined;
-      } catch (error) {
-        this.recordWarning(`条目已删除，但清不掉本地布局里的覆盖：${String(error)}`);
+    return this.withManifestLock(join(root, ...MANIFEST_RELATIVE_PATH), async () => {
+      const project = this.projects.find((candidate) => samePath(candidate.root, root));
+      if (project === undefined || project.configFile === undefined) {
+        return failure(ERROR_CODES.notFound, '这个项目还没有可编辑的 .dsh/run.json');
       }
-    }
+      const manifestPath = project.configFile;
 
-    const { project: reloaded } = await loadProject(project.root);
-    this.projects = [
-      ...this.projects.filter((candidate) => !samePath(candidate.root, project.root)),
-      reloaded,
-    ];
-    this.deps.log('info', `界面删除条目：${project.root} ← ${entryId}`);
-    return { ok: true, entry: entryId, projectRoot: project.root };
+      let text: string;
+      try {
+        text = await readFile(manifestPath, 'utf8');
+      } catch (error) {
+        return failure(ERROR_CODES.fs, '读不了 .dsh/run.json', String(error));
+      }
+      const removed = removeTaskFromManifestText(text, entryId);
+      if (!removed.ok) return failure(ERROR_CODES.badRequest, removed.message);
+
+      try {
+        await this.writeManifestAtomically(manifestPath, removed.text);
+      } catch (error) {
+        return failure(ERROR_CODES.fs, '写不了 .dsh/run.json', String(error));
+      }
+
+      // 本机布局里对它的覆盖也清掉，免得留一个指向已删条目的孤儿键。
+      if (this.layout.buttons[entryId] !== undefined) {
+        const buttons = { ...this.layout.buttons };
+        delete buttons[entryId];
+        const next: LocalLayout = { buttons, ...pickDensity(this.layout.density) };
+        try {
+          await writeLayout(this.layoutFile, next);
+          this.layout = next;
+          this.layoutMtimeMs = undefined;
+        } catch (error) {
+          this.recordWarning(`条目已删除，但清不掉本地布局里的覆盖：${String(error)}`);
+        }
+      }
+
+      const { project: reloaded } = await loadProject(project.root);
+      this.projects = [
+        ...this.projects.filter((candidate) => !samePath(candidate.root, project.root)),
+        reloaded,
+      ];
+      this.deps.log('info', `界面删除条目：${project.root} ← ${entryId}`);
+      return { ok: true, entry: entryId, projectRoot: project.root };
+    });
   }
 
   /** 写单个按钮的本地覆盖（顺序 / 显隐 / 图标 / 分组 / 标题）。 */
-  async setButtonOverride(    entry: string,
+  async setButtonOverride(
+    entry: string,
     override: ButtonOverride,
   ): Promise<ApiResult<{ entry: string }>> {
     const previous = this.layout.buttons[entry];

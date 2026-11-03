@@ -385,7 +385,9 @@ await (async () => {
         `展开态缺字段 ${key}（文案在字典里不等于字段画出来了）`,
       );
     }
-  });  await check('parseEnvLines：KEY=value 每行一条，坏行把原文指出来', () => {
+  });
+
+  await check('parseEnvLines：KEY=value 每行一条，坏行把原文指出来', () => {
     const ok = x.parseEnvLines('A=1\n# 注释\n\nB = two words ');
     assert.equal(ok.error, undefined);
     assert.deepEqual(ok.env, { A: '1', B: 'two words' });

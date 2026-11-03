@@ -133,6 +133,8 @@ const ZH: Record<string, string> = {
   fieldButtonGroupPlaceholder: '可选；同组按钮在条上相邻',
   fieldAppearanceHint: '图标与分组只写进本机的 layout.json，不进仓库、不影响别人。',
   createdNote: '已写进 .dsh/run.json 并钉到按钮条。',
+  createdUnpinnedNote: '已写进 .dsh/run.json，但没能钉上按钮条。',
+  pinRetryNote: '可以在 ☰「管理」面板里手动钉上。',
   manageTitle: '管理启动项',
   manageHint: '按住某一行的 ⋮⋮ 上下拖动调顺序（也可以 Alt+↑/↓）；「从按钮条收起」只把按钮从条上移除，条目还在；「删除」会真的把这条任务从 .dsh/run.json 里移除。',
   deleteEntry: '删除',
@@ -249,6 +251,8 @@ const EN: Record<string, string> = {
   fieldButtonGroupPlaceholder: 'Optional; same group stays adjacent',
   fieldAppearanceHint: 'Icon and group only go into this machine’s layout.json — not the repo, not other people.',
   createdNote: 'Written into .dsh/run.json and pinned to the bar.',
+  createdUnpinnedNote: 'Written into .dsh/run.json, but pinning it to the bar failed.',
+  pinRetryNote: 'You can pin it manually from the ☰ manage panel.',
   manageTitle: 'Manage launch entries',
   manageHint: 'Drag a row by its ⋮⋮ handle (or Alt+↑/↓) to reorder; "Hide from bar" only removes the button, while "Delete" removes the task from .dsh/run.json.',
   deleteEntry: 'Delete',
@@ -1318,11 +1322,12 @@ interface BarProps {
   /**
    * 新建启动项（写进项目 run.json 的 tasks[]），成功后由调用方钉到按钮条。
    * `button` 是外观（图标/分组），只进本机 layout.json——run.json 里不存展示。
+   * 条目写进清单后钉条若失败，结果带 `pinError` 原样回到面板（条目本身已建成）。
    */
   onCreateTask(
     input: NewTaskInput,
     button: { icon?: string; group?: string },
-  ): Promise<ApiResult<{ entry: string }>>;
+  ): Promise<ApiResult<{ entry: string; pinError?: string }>>;
   /** 删除启动项（真的从项目 run.json 的 tasks[] 里移除）。 */
   onDeleteTask(entryId: string): Promise<ApiResult<unknown>>;
   /** 最近一次跑/停的失败原因；非 null 时条上出现一个可点的告警标记。 */
@@ -1856,6 +1861,8 @@ function AddPanel(props: BarProps): React.ReactElement {
   const [creating, setCreating] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [created, setCreated] = React.useState<string | null>(null);
+  /** 条目已建成、但把它钉上按钮条的那一步失败了（null = 正常钉上或还没创建）。 */
+  const [pinError, setPinError] = React.useState<string | null>(null);
 
   /** 面板一打开就读一次检测：只读、不落盘，点候选才填表。 */
   const alive = React.useRef(true);
@@ -1965,6 +1972,7 @@ function AddPanel(props: BarProps): React.ReactElement {
 
     setCreating(true);
     setError(null);
+    setPinError(null);
     try {
       const result = await onCreateTask(input, {
         ...(icon.trim().length > 0 ? { icon: icon.trim() } : {}),
@@ -1991,6 +1999,7 @@ function AddPanel(props: BarProps): React.ReactElement {
       setIcon('');
       setButtonGroup('');
       setCreated(result.entry);
+      setPinError(result.pinError ?? null);
       // 刚建的那条现在"已在清单"了：重读候选，别让防重复的标记停在创建之前。
       void loadDetection();
     } finally {
@@ -2029,7 +2038,14 @@ function AddPanel(props: BarProps): React.ReactElement {
       <p className="__ru_popHint">{runtime.t('createHint')}</p>
       {error !== null ? <p className="__ru_error">❌ {error}</p> : null}
       {created !== null ? (
-        <p className="__ru_popHint">✓ {created} · {runtime.t('createdNote')}</p>
+        pinError === null ? (
+          <p className="__ru_popHint">✓ {created} · {runtime.t('createdNote')}</p>
+        ) : (
+          <>
+            <p className="__ru_popHint">✓ {created} · {runtime.t('createdUnpinnedNote')}</p>
+            <p className="__ru_error">⚠️ {pinError} · {runtime.t('pinRetryNote')}</p>
+          </>
+        )
       ) : null}
       {projectRoot === null ? <p className="__ru_popNote">{runtime.t('noProjectNote')}</p> : null}
 
@@ -3302,18 +3318,19 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
           return { ok: false, code: 'NOT_FOUND', message: runtime.t('noFocus') };
         }
         const result = await createTask(root, input);
+        if (!result.ok) return result;
         // 用户的意图是"加一个按钮"，不是"往文件里塞一条记录"：创建成功就顺手钉上条。
         // 图标/分组走本地覆盖（`/button`），不进 run.json——外观是本机的事。
-        if (result.ok) {
-          await call('/button', 'POST', {
-            entry: result.entry,
-            pinned: true,
-            ...(button.icon !== undefined ? { icon: button.icon } : {}),
-            ...(button.group !== undefined ? { group: button.group } : {}),
-          });
-          await pull();
-        }
-        return result;
+        // 钉条失败**不能整条吞掉**：条目已建成，报"创建失败"会撒谎，报成功会缺按钮——
+        // 原样把失败原因带回（`pinError`），由面板展示并提示到 ☰ 里手动补钉。
+        const pinned = await call('/button', 'POST', {
+          entry: result.entry,
+          pinned: true,
+          ...(button.icon !== undefined ? { icon: button.icon } : {}),
+          ...(button.group !== undefined ? { group: button.group } : {}),
+        });
+        await pull();
+        return pinned.ok ? result : { ...result, pinError: pinned.message };
       }}
       onDeleteTask={async (entryId) => {
         const root = state.focused?.projectRoot ?? null;

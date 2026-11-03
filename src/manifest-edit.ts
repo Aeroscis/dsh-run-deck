@@ -431,8 +431,11 @@ export function removeTaskFromManifestText(text: string, entryId: string): Remov
   if (tasksRange === null) return { ok: false, message: '清单里没有 tasks[]' };
   const taskRanges = arrayElementRanges(text, tasksRange.start, tasksRange.end);
 
-  // 按"解析后的 id"匹配：清单里有显式 id 用显式 id，没有就按 label 派生——和
-  // resolveEntries() 的规则一致，否则界面上的 id 和清单里的元素对不上号。
+  // 按"解析后的 id"匹配：与 resolveEntries() 的规则**逐字对齐**——
+  //   有显式 id：未被占用用显式 id；被占用时从 **id 串**派生（`${entry.id}`）；
+  //   没有显式 id：从 label 派生。
+  // 早先这里冲突兜底走的是 label，清单里出现两条相同显式 id 时，
+  // "界面看到的 id"和这里的定位就会分叉 → 删错或删不到。
   const taken = new Set<string>();
   let target = -1;
   for (let index = 0; index < taskRanges.length; index += 1) {
@@ -440,7 +443,12 @@ export function removeTaskFromManifestText(text: string, entryId: string): Remov
     if (element === undefined) continue;
     const explicit = typeof element['id'] === 'string' && element['id'].length > 0 ? element['id'] : undefined;
     const label = typeof element['label'] === 'string' ? element['label'] : '';
-    const id = explicit !== undefined && !taken.has(explicit) ? explicit : deriveId(label || explicit || 'task', taken);
+    const id =
+      explicit !== undefined && !taken.has(explicit)
+        ? explicit
+        : explicit !== undefined
+          ? deriveId(explicit, taken)
+          : deriveId(label || 'task', taken);
     taken.add(id);
     if (id === entryId) target = index;
   }

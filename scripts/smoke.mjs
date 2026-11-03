@@ -1275,7 +1275,171 @@ await check('界面新建启动项：真的写进 run.json 的 tasks[]，条目�
   assert.notEqual(again.entry, created.entry);
 });
 
-await check('空目录也能建第一条：没有 .dsh/run.json 时自动创建', async () => {  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已在清单" → 删 + buttons[] 清理', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-taskhttp-'));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { dev: 'vite' } }), 'utf8');
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-taskhttpdata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+  const routes = createRoutes({ manager, ready: Promise.resolve(), trustedHosts: () => [], log: () => {} });
+
+  // 缺参必须报错：三个路由都不许"没给 projectRoot 也继续"
+  const noRoot = await callRoute(routes, '/dsh-rundeck/api/task', '', { method: 'POST', body: {} });
+  assert.equal(noRoot.ok, false);
+  assert.match(noRoot.message, /projectRoot/);
+  const noDetect = await callRoute(routes, '/dsh-rundeck/api/detect', '', { method: 'POST', body: {} });
+  assert.equal(noDetect.ok, false);
+  const noRemove = await callRoute(routes, '/dsh-rundeck/api/task/remove', '', {
+    method: 'POST',
+    body: { projectRoot: dir },
+  });
+  assert.equal(noRemove.ok, false);
+
+  const taskPath = '/dsh-rundeck/api/task';
+
+  // 先检测一次：还没有条目时 dev 不该被标"已在清单"
+  const detectPath = '/dsh-rundeck/api/detect';
+  const detectBefore = await callRoute(routes, detectPath, '', {
+    method: 'POST',
+    body: { projectRoot: dir },
+  });
+  assert.equal(detectBefore.ok, true);
+  if (!detectBefore.ok) return;
+  assert.equal(detectBefore.packageManager ?? 'npm', 'npm');
+  assert.equal(
+    detectBefore.candidates.find((candidate) => candidate.key === 'package.json:dev')?.exists,
+    false,
+  );
+
+  const created = await callRoute(routes, taskPath, '', {
+    method: 'POST',
+    body: {
+      projectRoot: dir,
+      label: 'API dev',
+      command: 'npm run dev',
+      isBackground: true,
+      readyPattern: 'Local:',
+      openUrl: true,
+    },
+  });
+  assert.equal(created.ok, true, `建条失败：${created.message ?? ''}`);
+  if (!created.ok) return;
+  const document = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run.json'), 'utf8')));
+  assert.equal(document.tasks[0].id, 'api-dev');
+  assert.equal(document.tasks[0].isBackground, true);
+
+  // 创建后再检测：dev 现在标"已在清单"（HTTP 一来一回都不敢断层）
+  const detectMid = await callRoute(routes, detectPath, '', {
+    method: 'POST',
+    body: { projectRoot: dir },
+  });
+  assert.equal(detectMid.ok, true);
+  if (!detectMid.ok) return;
+  assert.equal(
+    detectMid.candidates.find((candidate) => candidate.key === 'package.json:dev')?.exists,
+    true,
+  );
+
+  const removePath = '/dsh-rundeck/api/task/remove';
+  const removed = await callRoute(routes, removePath, '', {
+    method: 'POST',
+    body: { projectRoot: dir, entryId: 'api-dev' },
+  });
+  assert.equal(removed.ok, true, `删条失败：${removed.message ?? ''}`);
+  const after = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run.json'), 'utf8')));
+  assert.equal(after.tasks.length, 0, '删除要把 tasks[] 清空');
+  assert.deepEqual(after.buttons ?? [], [], 'buttons[] 里不该留下悬空声明');
+
+  // 删完再检测：dev 的"已在清单"标记要消失（读的是删除后的清单）
+  const detectAfter = await callRoute(routes, detectPath, '', {
+    method: 'POST',
+    body: { projectRoot: dir },
+  });
+  assert.equal(detectAfter.ok, true);
+  if (!detectAfter.ok) return;
+  assert.equal(
+    detectAfter.candidates.find((candidate) => candidate.key === 'package.json:dev')?.exists,
+    false,
+  );
+});
+
+await check('同清单两个并发 createTask 不丢改动：两条都落盘、清单可解析、id 各自唯一', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'rundeck-race-'));
+  mkdirSync(join(dir, '.dsh'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run.json');
+  writeFileSync(
+    manifestPath,
+    '{\n  // 冲突会在这里露馅\n  "version": "2.0.0",\n  "tasks": []\n}\n',
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-racedata-'));
+  const manager = new RundeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+
+  // 不加锁时这两个会同时从旧文本出发：后写者把先写者整条吞掉（lost update）；
+  // 串行锁让后进者在锁里先看到前者的写入结果。
+  const [first, second] = await Promise.all([
+    manager.createTask(dir, { label: 'Alpha', command: 'node alpha.js' }),
+    manager.createTask(dir, { label: 'Beta', command: 'node beta.js' }),
+  ]);
+  assert.equal(first.ok, true, `第一路失败：${first.ok ? '' : first.message}`);
+  assert.equal(second.ok, true, `第二路失败：${second.ok ? '' : second.message}`);
+  if (!first.ok || !second.ok) return;
+  // 键的第一语义：先确认两条 id 都跟对方不同（防"两条同名互相覆盖"这一路径）
+  assert.notEqual(first.entry, second.entry);
+
+  const document = JSON.parse(stripJsonComments(readFileSync(manifestPath, 'utf8')));
+  assert.equal(document.tasks.length, 2, '两条都必须活下来（谁也不许吞谁）');
+  assert.ok(
+    readFileSync(manifestPath, 'utf8').includes('// 冲突会在这里露馅'),
+    '注释仍然保留',
+  );
+  const ids = document.tasks.map((task) => task.id).sort();
+  assert.deepEqual(ids, [first.entry, second.entry].sort());
+});
+
+await check('重复显式 id：删除定位用的 id 派生与 resolveEntries 一致（界面看哪条就删哪条）', async () => {
+  const text = [
+    '{',
+    '  "version": "2.0.0",',
+    '  "tasks": [',
+    '    { "label": "first", "id": "dup", "command": "node", "args": ["a"] },',
+    '    { "label": "second", "id": "dup", "command": "node", "args": ["b"] }',
+    '  ]',
+    '}',
+    '',
+  ].join('\n');
+  const root = join(tmpdir(), 'rundeck-dupid');
+  const document = coerceDocument(JSON.parse(stripJsonComments(text))).document;
+  const ids = resolveEntries(root, document).map((entry) => entry.id);
+  // resolveEntries 的规则：第二条的显式 id 被占用 → 从 **id 串**派生出 dup-2
+  assert.deepEqual(ids, ['dup', 'dup-2']);
+
+  const removed = removeTaskFromManifestText(text, 'dup-2');
+  assert.equal(removed.ok, true, `dup-2 应该能删到：${removed.ok ? '' : removed.message}`);
+  if (!removed.ok) return;
+  const remaining = JSON.parse(stripJsonComments(removed.text)).tasks;
+  assert.equal(remaining.length, 1);
+  assert.deepEqual(remaining[0].args, ['a'], '删掉的是第二条（不是界面 id 对不上的猜错那条）');
+});
+
+await check('空目录也能建第一条：没有 .dsh/run.json 时自动创建', async () => {
+  const { RundeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), 'rundeck-firsttask-'));
   const dataDir = mkdtempSync(join(tmpdir(), 'rundeck-firsttaskdata-'));
   const manager = new RundeckManager({
