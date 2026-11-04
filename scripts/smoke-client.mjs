@@ -230,7 +230,7 @@ await (async () => {
   });
 
   await check('＋＝只负责新建、☰＝管理（排序 + 收起 + 删除）', () => {
-    for (const key of ['createTitle', 'createHint', 'manageTitle', 'manageHint', 'deleteEntry', 'deleteConfirm', 'deleteCancel']) {
+    for (const key of ['createTitle', 'createHint', 'manageTitle', 'deleteEntry', 'deleteConfirm', 'deleteCancel']) {
       assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
       assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
     }
@@ -355,7 +355,7 @@ await (async () => {
     const zh = Object.keys(x.ZH);
     for (const key of [
       'run', 'stop', 'densityFull', 'densityCompact', 'densityIcon', 'densityCycle',
-      'overflow', 'add', 'settings', 'createTitle', 'createHint', 'manageTitle', 'manageHint',
+      'overflow', 'add', 'settings', 'createTitle', 'createHint', 'manageTitle',
       'addPinned', 'addUnpinned',
       'addPin', 'addHide', 'settingsTitle', 'settingsDensity', 'settingsRuns',
       'settingsWarnings', 'settingsCapability', 'noFocus',

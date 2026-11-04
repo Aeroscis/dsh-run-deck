@@ -136,7 +136,6 @@ const ZH: Record<string, string> = {
   createdUnpinnedNote: '已写进 .dsh/run-deck/run.json，但没能钉上按钮条。',
   pinRetryNote: '可以在 ☰「管理」面板里手动钉上。',
   manageTitle: '管理启动项',
-  manageHint: '按住某一行的 ⋮⋮ 上下拖动调顺序（也可以 Alt+↑/↓）；「从按钮条收起」只把按钮从条上移除，条目还在；「删除」会真的把这条任务从 .dsh/run-deck/run.json 里移除。',
   deleteEntry: '删除',
   deleteConfirm: '确认删除',
   deleteCancel: '取消',
@@ -157,7 +156,7 @@ const ZH: Record<string, string> = {
   addPin: '钉到按钮条',
   addHide: '从按钮条收起',
   addClose: '关闭',
-  dragHint: '按住拖动排序（也可以 Alt+↑ / Alt+↓）',
+  dragHint: '拖动排序',
   settingsTitle: 'Run Configuration',
   settingsManifest: '清单文件',
   settingsSource: '配置来源',
@@ -254,7 +253,6 @@ const EN: Record<string, string> = {
   createdUnpinnedNote: 'Written into .dsh/run-deck/run.json, but pinning it to the bar failed.',
   pinRetryNote: 'You can pin it manually from the ☰ manage panel.',
   manageTitle: 'Manage launch entries',
-  manageHint: 'Drag a row by its ⋮⋮ handle (or Alt+↑/↓) to reorder; "Hide from bar" only removes the button, while "Delete" removes the task from .dsh/run-deck/run.json.',
   deleteEntry: 'Delete',
   deleteConfirm: 'Confirm delete',
   deleteCancel: 'Cancel',
@@ -275,7 +273,7 @@ const EN: Record<string, string> = {
   addPin: 'Pin to bar',
   addHide: 'Hide from bar',
   addClose: 'Close',
-  dragHint: 'Drag to reorder (or Alt+↑ / Alt+↓)',
+  dragHint: 'Drag to reorder',
   settingsTitle: 'Run Configuration',
   settingsManifest: 'Manifest',
   settingsSource: 'Config source',
@@ -2587,7 +2585,6 @@ function ManagePanel(props: BarProps): React.ReactElement {
   return (
     <div ref={listRef}>
       <h4 className="__ru_popTitle">{runtime.t('manageTitle')}</h4>
-      <p className="__ru_popHint">{runtime.t('manageHint')}</p>
       {error !== null ? <p className="__ru_error">❌ {error}</p> : null}
       {projectRoot === null ? (
         <p className="__ru_popNote">{runtime.t('noProjectNote')}</p>
@@ -2642,16 +2639,6 @@ function ManagePanel(props: BarProps): React.ReactElement {
               }}
               onPointerCancel={() => {
                 if (dragRef.current !== null) endDrag(false);
-              }}
-              onKeyDown={(event) => {
-                if (!event.altKey) return;
-                if (event.key === 'ArrowUp') {
-                  event.preventDefault();
-                  move(index, index - 1);
-                } else if (event.key === 'ArrowDown') {
-                  event.preventDefault();
-                  move(index, index + 1);
-                }
               }}
             >
               ⋮⋮
