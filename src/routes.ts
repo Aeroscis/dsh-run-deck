@@ -83,10 +83,55 @@ function asString(value: unknown): string {
 }
 
 /**
+ * `/task` 请求体的**字段级**校验：只揪"给了但类型/取值不对"的键，没给的键不算——
+ * 缺字段是业务校验（在 `newtask.ts` 里做，给的是"缺 label"那种业务话术），
+ * 这里管的是 JSON 形状接错了契约：必须点名报错，不能静默当"没给"
+ * （否则 `openUrl` 传字符串 `"true"` 会变成一条不打开的默认任务，调用方毫无感知）。
+ * 没在清单里的多余字段仍然忽略（向后兼容，加新字段不破坏旧调用方）。
+ */
+interface FieldIssue {
+  field: string;
+  expected: string;
+}
+
+function collectFieldIssues(body: Record<string, unknown>): FieldIssue[] {
+  const issues: FieldIssue[] = [];
+  for (const field of ['label', 'command', 'cwd', 'id', 'readyPattern', 'urlPattern', 'uriFormat', 'onReady']) {
+    if (body[field] !== undefined && typeof body[field] !== 'string') {
+      issues.push({ field, expected: '字符串' });
+    }
+  }
+  for (const field of ['isBackground', 'openUrl']) {
+    if (body[field] !== undefined && typeof body[field] !== 'boolean') {
+      issues.push({ field, expected: '布尔（true / false）' });
+    }
+  }
+  const envRaw = body['env'];
+  if (envRaw !== undefined) {
+    if (envRaw === null || typeof envRaw !== 'object' || Array.isArray(envRaw)) {
+      issues.push({ field: 'env', expected: '对象（"KEY": "值"）' });
+    } else {
+      for (const [key, value] of Object.entries(envRaw as Record<string, unknown>)) {
+        if (typeof value !== 'string') issues.push({ field: `env.${key}`, expected: '字符串' });
+      }
+    }
+  }
+  const group = body['group'];
+  if (group !== undefined && group !== 'build' && group !== 'test' && group !== 'none') {
+    issues.push({ field: 'group', expected: 'build / test / none 之一' });
+  }
+  const reveal = body['reveal'];
+  if (reveal !== undefined && reveal !== 'always' && reveal !== 'silent' && reveal !== 'never') {
+    issues.push({ field: 'reveal', expected: 'always / silent / never 之一' });
+  }
+  return issues;
+}
+
+/**
  * 把 `/task` 的请求体收成 `NewTaskInput`。
  *
- * 只挑**已知字段**，值类型不对就当作没给（校验在 `newtask.ts` 里统一做，
- * 这里不重复判断，也不让多余字段混进去）。注意这里仍然没有任何"自由命令"字段：
+ * 只挑**已知字段**；"给的值不对"已经在 `collectFieldIssues` 里点名报错，
+ * 这里只负责收敛合法形状，不让多余字段混进去。注意仍然没有任何"自由命令"字段：
  * 写进清单的 `command` 由 `splitCommandLine` 拆一条人填的命令行得到。
  */
 function newTaskInputFromBody(body: Record<string, unknown>): NewTaskInput {
@@ -377,6 +422,14 @@ export function createRoutes(host: RouteHost): RunDeckRoute[] {
           ok: false,
           code: ERROR_CODES.badRequest,
           message: '缺少 projectRoot',
+        } satisfies ApiError;
+      }
+      const issues = collectFieldIssues(body);
+      if (issues.length > 0) {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: `字段类型/取值不对：${issues.map((issue) => `${issue.field}（需 ${issue.expected}）`).join('；')}`,
         } satisfies ApiError;
       }
       return manager.createTask(projectRoot, newTaskInputFromBody(body));

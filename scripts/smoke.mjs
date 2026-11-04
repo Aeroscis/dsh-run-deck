@@ -1340,7 +1340,35 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
 
   const taskPath = '/dsh-run-deck/api/task';
 
-  // 先检测一次：还没有条目时 dev 不该被标"已在清单"
+  // 字段级校验：给了但类型/取值不对的键要点名报错，不许静默当"没给"。
+  // （openUrl 传字符串 "true" 曾经会落成一条不打开的默认任务——正整改的就是它。）
+  const badOpenUrl = await callRoute(routes, taskPath, '', {
+    method: 'POST',
+    body: { projectRoot: dir, label: 'x', command: 'node', openUrl: 'true' },
+  });
+  assert.equal(badOpenUrl.ok, false);
+  assert.match(badOpenUrl.message, /openUrl/, `要点名 openUrl：${badOpenUrl.message}`);
+  const badEnv = await callRoute(routes, taskPath, '', {
+    method: 'POST',
+    body: { projectRoot: dir, label: 'x', command: 'node', env: { PORT: 3000 } },
+  });
+  assert.match(badEnv.message, /env\.PORT/, `要点名 env.PORT：${badEnv.message}`);
+  const badGroup = await callRoute(routes, taskPath, '', {
+    method: 'POST',
+    body: { projectRoot: dir, label: 'x', command: 'node', group: 'runtime' },
+  });
+  assert.match(badGroup.message, /group/, `要点名 group：${badGroup.message}`);
+  // 这些被拒的调用一个字节都不能落盘
+  assert.equal(existsSync(join(dir, '.dsh', 'run-deck', 'run.json')), false, '坏类型请求不许建清单');
+
+  // 显式 openUrl:false 与"没给"等价：合法形状，照常创建、不产生就绪动作
+  const noOpen = await callRoute(routes, taskPath, '', {
+    method: 'POST',
+    body: { projectRoot: dir, label: 'NoOpen', command: 'node keep.js', openUrl: false },
+  });
+  assert.equal(noOpen.ok, true, `openUrl:false 应当合法：${noOpen.message ?? ''}`);
+
+  // 检测一轮：dev 还是 package.json 里的候选，不该被标"已在清单"（作者标签与 NoOpen 无关）
   const detectPath = '/dsh-run-deck/api/detect';
   const detectBefore = await callRoute(routes, detectPath, '', {
     method: 'POST',
@@ -1368,10 +1396,13 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
   assert.equal(created.ok, true, `建条失败：${created.message ?? ''}`);
   if (!created.ok) return;
   const document = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), 'utf8')));
-  assert.equal(document.tasks[0].id, 'api-dev');
-  assert.equal(document.tasks[0].isBackground, true);
+  assert.equal(document.tasks.length, 2, 'NoOpen 与 api-dev 两条都在');
+  const apiDev = document.tasks.find((task) => task.id === 'api-dev');
+  assert.equal(apiDev.isBackground, true);
+  const noOpenTask = document.tasks.find((task) => task.label === 'NoOpen');
+  assert.equal(noOpenTask.serverReadyAction, undefined, 'openUrl:false 不产生就绪动作');
 
-  // 创建后再检测：dev 现在标"已在清单"（HTTP 一来一回都不敢断层）
+  // "已在清单"标记不再漂移：dev 现在就是清单里的命令（HTTP 一来一回都不敢断层）
   const detectMid = await callRoute(routes, detectPath, '', {
     method: 'POST',
     body: { projectRoot: dir },
@@ -1382,6 +1413,15 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
     detectMid.candidates.find((candidate) => candidate.key === 'package.json:dev')?.exists,
     true,
   );
+
+  // 先把这条收尾：no-open 这条也走 /task/remove（用创建结果里的真实 id，
+  // 顺带验一遍"deriveId 会怎么拼"不再是测试里再猜一遍），
+  // 为后面的"删空"断言让路
+  const removedNoOpen = await callRoute(routes, '/dsh-run-deck/api/task/remove', '', {
+    method: 'POST',
+    body: { projectRoot: dir, entryId: noOpen.entry },
+  });
+  assert.equal(removedNoOpen.ok, true, `no-open 删不掉：${removedNoOpen.message ?? ''}`);
 
   const removePath = '/dsh-run-deck/api/task/remove';
   const removed = await callRoute(routes, removePath, '', {
