@@ -120,8 +120,8 @@ export async function resolveRunRoute(ctx: DshContext): Promise<
     return {
       ok: false,
       code: ERROR_CODES.noTerminal,
-      message: probe.reason ?? '宿主没有可用的执行缝（ctx.subprocess.spawnTerminal）',
-      hint: '没有真 PTY 就不能起长驻进程：job 派生的进程收不到 Ctrl+C，脚本的清理处理器不会跑。',
+      message: probe.reason ?? '宿主没有可用的执行通道，按钮点了也跑不起来',
+      hint: '这个宿主不允许插件直接开终端进程，长驻的脚本就收不到 Ctrl+C。需要宿主提供 spawnTerminal 能力（详见 README 的"为什么走 PTY"）。',
     };
   }
 
