@@ -18,7 +18,13 @@ import { initialHookState, observeLine, type HookOutcome, type HookState } from 
 import { detectTasks as detectProjectTasks } from './detect.js';
 import { insertTaskIntoManifestText, removeTaskFromManifestText } from './manifest-edit.js';
 import { buildTaskEntry } from './newtask.js';
-import { loadProject, loadProjects, MANIFEST_RELATIVE_PATH, normalizeRoot } from './projects.js';
+import {
+  LEGACY_MANIFEST_RELATIVE_PATH,
+  loadProject,
+  loadProjects,
+  MANIFEST_RELATIVE_PATH,
+  normalizeRoot,
+} from './projects.js';
 import { messageOf } from './sessions.js';
 import { effectiveButtons, emptyLayout, layoutFileIn, readLayout, writeLayout } from './store.js';
 import {
@@ -78,6 +84,15 @@ function normalizeForCompare(path: string): string {
 async function directoryExists(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** 这个路径是不是一份真实存在的文件（用来发现"清单刚刚被写出来"）。 */
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
   } catch {
     return false;
   }
@@ -1135,7 +1150,8 @@ export class RunDeckManager {
    *     被记成"已加载项目"，否则下次刷新又会把它算进去、还可能在 warnings 里重复出现。
    *   - 已经加载过的项目要**看一眼 mtime**：改了 `.dsh/run-deck/run.json`（改 pattern、加按钮）
    *     之后下一轮 `/state`（≤2.5s）就生效，不需要重启 DSH，也不需要知道
-   *     `/run-deck list` 会顺手重读。实测这条是刚需——改完清单发现界面还是旧的，
+   *     `/run-deck list` 会顺手重读。**清单是后来才写出来的**也算"改过"（读盘时它
+   *     还不存在），否则新建清单要重启才看得见。实测这条是刚需——改完清单发现界面还是旧的，
    *     人只会以为"插件没生效"。
    */
   private async loadFocusedProject(root: string): Promise<RunProject | undefined> {
@@ -1163,7 +1179,15 @@ export class RunDeckManager {
 
   /** 这份清单在磁盘上是否已经和读它的时候不一样了（文件没了也算"变了"）。 */
   private async manifestChanged(project: RunProject): Promise<boolean> {
-    if (project.configFile === undefined) return false;
+    if (project.configFile === undefined) {
+      // 读这个项目时还没有清单：之后**新建**清单也算"变了"，否则要重启 DSH 才能
+      // 看到按钮——而"改完清单下一轮就生效"正是这条轮询要保证的。两个落点都看一眼，
+      // 与 loadProject 的读盘兜底保持一致（旧落点 `.dsh/run.json` 仍兼容）。
+      return (
+        (await fileExists(join(project.root, ...MANIFEST_RELATIVE_PATH))) ||
+        (await fileExists(join(project.root, ...LEGACY_MANIFEST_RELATIVE_PATH)))
+      );
+    }
     try {
       const stats = await stat(project.configFile);
       return project.manifestMtimeMs === undefined || stats.mtimeMs !== project.manifestMtimeMs;

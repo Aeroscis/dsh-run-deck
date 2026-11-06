@@ -2362,6 +2362,22 @@ await check('ensureProject 把磁盘上的目录现读成项目（启动扫描�
   assert.equal(await manager.ensureProject(mkdtempSync(join(tmpdir(), 'run-deck-none-'))), false);
 });
 
+await check('项目先被加载、清单后写出来：下一轮 ensureProject 就重读（不用重启）', async () => {
+  const manager = await makeDetachedManager();
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-late-'));
+  // 第一次进来时目录里没有清单：项目仍然算焦点（0 条），configFile 是 undefined
+  const first = await manager.focusCwd(dir);
+  assert.equal(first.ok, true);
+  assert.deepEqual(manager.state(dir).buttons, []);
+
+  // 之后手写清单。以前 manifestChanged 对 configFile===undefined 直接返回 false，
+  // 于是要重启 DSH 才能看见按钮（QJin 加 gallery 时就是这么被绊住的）。
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), JSON.stringify(MANIFEST_3), 'utf8');
+  assert.equal(await manager.ensureProject(dir), true);
+  assert.equal(manager.state(dir).buttons.length, 3);
+});
+
 await check('清单被改过时自动重读（不用重启、也不用知道 /run-deck list 会重读）', async () => {
   const logs = [];
   const { manager, dir, root } = await makeManager(MANIFEST_3, { logs });
