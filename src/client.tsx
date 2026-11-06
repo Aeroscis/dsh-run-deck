@@ -2904,12 +2904,35 @@ function outputRunOf(
 }
 
 /**
+ * 自动钉住的输出卡什么时候该自己收起来。
+ *
+ * `presentation.reveal: "always"` 钉出来的卡是**这条 run 的输出窗口**，不是常驻面板：
+ * 长驻条目（`isBackground`，例如直接跑一个客户端 exe）的进程一结束——用户关掉软件、
+ * 或者点了「停」——卡就跟着收，不能留下一个"进程早没了、面板还开着"的僵尸。
+ * 一次性命令（构建 / 检查）跑完仍然留在原处：末次输出本身就是结果，收掉等于把结果藏了。
+ *
+ * **只对自动钉的卡生效**：手动钉住是使用者明确说"留着"，不能被自动收走。
+ * run 在列表里彻底不见了（宿主重启等）也按"结束"处理。
+ */
+function autoPinnedRunEnded(
+  runs: RunRecord[],
+  projectRoot: string | null,
+  entryId: string | null,
+): boolean {
+  if (entryId === null) return false;
+  const run = outputRunOf(runs, projectRoot, entryId);
+  if (run === undefined) return true;
+  return run.background && run.status === 'exited';
+}
+
+/**
  * 输出悬浮卡 —— 出现的规矩照字面执行：
  *
  *   - 鼠标放到**正在跑**的按钮上 → 卡片在那颗按钮上方浮出，拿开就消失；
  *   - 卡片自己"接管"悬停：从按钮挪进卡片那段间隙不闪断（160ms 延迟窗）；
  *   - 卡上有一颗 📌：钉住后常驻，拿开也不消失；再点一次拔钉，恢复悬停规矩；
- *   - `presentation.reveal: "always"` 的条目跑起来那一刻自动钉一次（run.json 承诺的）。
+ *   - `presentation.reveal: "always"` 的条目跑起来那一刻自动钉一次（run.json 承诺的）；
+ *     自动钉的长驻卡在进程结束后自己收（见 `autoPinnedRunEnded`）。
  *
  * 尺寸刻意收窄：≤560px 宽、≤250px 高，盖不满条——输出短的时候卡自己就矮。
  *
@@ -3141,6 +3164,13 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
   const [panel, setPanel] = React.useState<'none' | 'add' | 'manage' | 'settings' | 'error' | 'overflow'>('none');
   /** 输出悬浮卡钉在哪条 entry（null = 没钉；reveal:always 也会自动钉）。 */
   const [pinnedEntry, setPinnedEntry] = React.useState<string | null>(null);
+  /**
+   * 当前这颗钉是不是 `reveal: "always"` 自动钉的。
+   *
+   * 自动钉的卡跟着那条 run 的生命周期走（长驻进程结束就收，见 `autoPinnedRunEnded`）；
+   * 手动钉的是使用者明确要求"留着"，轮询不会把它收走。
+   */
+  const autoPinnedRef = React.useRef(false);
   const [density, setDensity] = React.useState<ButtonDensity>('full');
 
   const pull = React.useCallback(async (): Promise<RunDeckState | null> => {
@@ -3177,6 +3207,22 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
         emptyBar: result.buttons.length === 0 && result.focusedEntries.length === 0,
       },
     );
+    /**
+     * 自动钉的卡：那条 run 结束后跟着收（手动钉的不动）。
+     *
+     * 用函数式 setState 读当前钉住的条目，避免 `pull` 的 useCallback 依赖里
+     * 再挂一个每秒都变的 `pinnedEntry`（那会让轮询 effect 每渲染一次就重建）。
+     */
+    const settleAutoPin = (next: RunDeckState): void => {
+      setPinnedEntry((current) => {
+        if (current === null || !autoPinnedRef.current) return current;
+        if (!autoPinnedRunEnded(next.runs, next.focused?.projectRoot ?? null, current)) {
+          return current;
+        }
+        autoPinnedRef.current = false;
+        return null;
+      });
+    };
     // 客户端报的 cwd 在 host 侧没解析出项目时，让它现读一次（任意目录都能用）。
     if (cwd !== null && result.focused !== null && result.focused.projectRoot === null) {
       const focus = await call<{ focused: { projectRoot: string | null } }>('/focus', 'POST', { cwd });
@@ -3185,6 +3231,7 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
         if (again.ok) {
           setState(again);
           if (again.layout.density !== undefined) setDensity(again.layout.density);
+          settleAutoPin(again);
           return again;
         }
         return null;
@@ -3192,6 +3239,7 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
     }
     setState(result);
     if (result.layout.density !== undefined) setDensity(result.layout.density);
+    settleAutoPin(result);
     return result;
   }, [ctx, sessionId]);
 
@@ -3248,9 +3296,13 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       // `presentation.reveal: "always"`（VS Code 的原义：这条命令跑起来时把它的
       // 输出亮出来）。run.json 里的承诺由界面兑现：跑起来那一刻**自动钉住**这条的
       // 悬浮预览卡（小卡、一键拔钉；拔了就回到"悬停才出现"的规矩）。
+      // 记下这是自动钉：长驻进程结束后由轮询把它收走（autoPinnedRunEnded）。
       if (result.ok) {
         const entry = state.focusedEntries.find((candidate) => candidate.id === entryId);
-        if (entry?.presentation?.reveal === 'always') setPinnedEntry(entryId);
+        if (entry?.presentation?.reveal === 'always') {
+          autoPinnedRef.current = true;
+          setPinnedEntry(entryId);
+        }
       }
       await pull();
       return result;
@@ -3283,7 +3335,11 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       onOpenSettings={() => setPanel(panel === 'settings' ? 'none' : 'settings')}
       onOpenError={() => setPanel(panel === 'error' ? 'none' : 'error')}
       pinnedEntry={pinnedEntry}
-      onTogglePin={(entry) => setPinnedEntry(pinnedEntry === entry ? null : entry)}
+      onTogglePin={(entry) => {
+        // 点过图钉之后这颗钉归使用者管：轮询不再自动收（哪怕原来显示的是自动钉）。
+        autoPinnedRef.current = false;
+        setPinnedEntry(pinnedEntry === entry ? null : entry);
+      }}
       entries={state.focusedEntries}
       projectRoot={state.focused?.projectRoot ?? null}
       configFile={state.focused?.configFile}
@@ -3441,13 +3497,14 @@ export default Object.assign(plugin, {
     RunPreviewCard,
     SettingsPanel,
     STACK_LIFT_RULE,
+    ansiSpans,
+    autoPinnedRunEnded,
     cwdOfSession,
     dropIndexFor,
     iconGlyph,
     injectStyles,
     labelFor,
     moveInOrder,
-    ansiSpans,
     openReadyUrl,
     parseEnvLines,
     popupSpaceFor,

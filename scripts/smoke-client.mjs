@@ -607,6 +607,37 @@ await (async () => {
     assert.equal(cards().length, 0, '拿开且过了缓冲，卡应该收起');
   });
 
+  await check('自动钉住的输出卡跟着长驻 run 走：进程结束才收，一次性命令保留末次输出', () => {
+    assert.equal(typeof x.autoPinnedRunEnded, 'function', 'autoPinnedRunEnded 不在 internals 上');
+    const runOf = (overrides) => ({
+      runId: 'r1',
+      projectRoot: 'D:/p',
+      entryId: 'piscellum/client',
+      label: '启动客户端',
+      status: 'running',
+      startedAt: 1,
+      background: true,
+      ...overrides,
+    });
+    const root = 'D:/p';
+    const id = 'piscellum/client';
+
+    assert.equal(x.autoPinnedRunEnded([runOf({})], root, id), false, '还在跑就不该收');
+    assert.equal(
+      x.autoPinnedRunEnded([runOf({ status: 'exited' })], root, id),
+      true,
+      '长驻进程结束（关掉软件/点停）就该自动拔钉',
+    );
+    assert.equal(
+      x.autoPinnedRunEnded([runOf({ status: 'exited', background: false })], root, id),
+      false,
+      '一次性命令跑完要保留末次输出（结果本身就是要看的东西）',
+    );
+    assert.equal(x.autoPinnedRunEnded([], root, id), true, 'run 从列表里消失也按结束处理');
+    assert.equal(x.autoPinnedRunEnded([runOf({})], 'D:/other', id), true, '项目对不上时找不到这条 run');
+    assert.equal(x.autoPinnedRunEnded([runOf({})], null, id), false, '没有项目根时按 entry 匹配');
+  });
+
   await check('弹层按「条上方实际可用高度」封顶（新会话输入框居中时顶部不被裁掉）', () => {
     assert.equal(typeof x.popupSpaceFor, 'function', 'popupSpaceFor 不在 internals 上');
     assert.equal(x.POPUP_OFFSET, 8, 'JS 里的缝与 CSS 锚点的 8px 不是同一个数');

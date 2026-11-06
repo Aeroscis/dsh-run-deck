@@ -38,6 +38,8 @@ export interface TaskOptions {
  *
  * 对本插件来说 `reveal: 'always'` 是**唯一活着的字段**：这条命令跑起来时，界面
  * 把它的输出悬浮卡自动钉住（悬停预览的那张小卡；拔钉恢复"悬停才出现"）。
+ * 自动钉的长驻条目（`isBackground`）在进程结束后会自己收起，一次性命令则保留末次
+ * 输出；手动钉住的卡不受影响。
  * `panel` / `clear` 描述的是
  * VS Code 家的终端标签，本插件没有对应物：面板本来就"每条 run 独立、开跑即新"
  * （已等价 dedicated + clear），收下字段但不告警。
@@ -137,6 +139,13 @@ export interface ResolvedEntry {
   command: string;
   args: string[];
   cwd: string;
+  /**
+   * `options.env` 展开后的额外环境变量。
+   *
+   * 语义是**叠加**：执行缝把它与宿主环境合并、同名覆盖，不是替换整份环境。
+   * 所以清单里只写要改的那几个键就够了（`PATH` / `PORT` …）。
+   */
+  env?: Record<string, string>;
   isBackground: boolean;
   problemMatcher?: ProblemMatcher;
   serverReadyAction?: ServerReadyAction;
