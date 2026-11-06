@@ -271,6 +271,7 @@ export function resolveEntries(root: string, document: RunConfigDocument): Resol
       command: expandVariables(entry.command, context),
       args: (entry.args ?? []).map((arg) => expandVariables(arg, context)),
       cwd,
+      ...(Object.keys(envResolved).length > 0 ? { env: envResolved } : {}),
       isBackground: entry.isBackground === true,
       ...(entry.problemMatcher !== undefined ? { problemMatcher: entry.problemMatcher } : {}),
       ...(entry.serverReadyAction !== undefined

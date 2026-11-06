@@ -2511,6 +2511,32 @@ await check('起一条 run：真的开一条 PTY（ctx.subprocess.spawnTerminal�
   assert.equal(runtime.calls.spawn.length, 1);
 });
 
+await check('options.env 真的交给 PTY：与宿主环境叠加，值里的 ${env:…} 先展开', async () => {
+  const { manager, root, runtime } = await makeManager({
+    version: '2.0.0',
+    tasks: [
+      {
+        label: 'web',
+        id: 'web',
+        command: 'python',
+        options: { env: { PATH: 'C:/Qt/6.5.3/msvc2019_64/bin;${env:PATH}', PORT: '9001' } },
+      },
+    ],
+  });
+  const expectedPath = `C:/Qt/6.5.3/msvc2019_64/bin;${process.env.PATH ?? ''}`;
+  assert.deepEqual(manager.state(root).focusedEntries[0].env, {
+    PATH: expectedPath,
+    PORT: '9001',
+  });
+
+  const result = await manager.startRun({ projectRoot: root, entryId: 'web', sessionId: 's1' });
+  assert.equal(result.ok, true);
+  const env = runtime.calls.spawn[0].env;
+  assert.equal(env.PORT, '9001');
+  assert.equal(env.PATH, expectedPath);
+  assert.equal(env.DSH_SESSION_ID, 's1');
+});
+
 await check('POSIX 上是 <shell> -c；问不到默认 shell 时 Windows 退到 cmd.exe', async () => {
   const posix = await makeManager(MANIFEST_3, { platform: 'posix' });
   await posix.manager.startRun({ projectRoot: posix.root, entryId: 'web', sessionId: 's' });

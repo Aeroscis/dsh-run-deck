@@ -212,7 +212,7 @@ shell 执行完就退，所以 `handle.done` 结算 = 这条任务结束，退�
 | `tasks[].command` | **必填** | **必须是 run.json 里的字面量**（见 §6） |
 | `tasks[].args` | `[]` | 参数；**整体不是字符串数组时忽略该字段并告警** |
 | `tasks[].options.cwd` | `${workspaceFolder}` | 工作目录 |
-| `tasks[].options.env` | —— | 额外环境变量 |
+| `tasks[].options.env` | —— | 额外环境变量；与宿主环境**叠加**（同名覆盖），值里可含 `${env:NAME}` |
 | `tasks[].isBackground` | `false` | 长驻只是「跑完不退出」 |
 | `tasks[].problemMatcher.background` | —— | `activeOnStart` / `beginsPattern` / `endsPattern` |
 | `tasks[].serverReadyAction` | —— | 只实现 `{ action: 'openExternally', pattern, uriFormat }` |

@@ -197,6 +197,11 @@ export async function spawnRunTerminal(
   commandLine: string,
   sessionId: string | undefined,
 ): Promise<DshSubprocessTerminalHandle> {
+  // `options.env` 是叠加而不是替换：subprocess-local 的 childEnv 会把它与宿主环境
+  // 合并（Windows 上按大小写不敏感去重），所以这里只递"要改的那几个键"。
+  const env: Record<string, string> = { ...entry.env };
+  if (sessionId !== undefined && sessionId.length > 0) env.DSH_SESSION_ID = sessionId;
+
   return route.subprocess.spawnTerminal({
     argv: [route.shell, ...route.shellArgs, commandLine],
     cwd: entry.cwd,
@@ -207,9 +212,7 @@ export async function spawnRunTerminal(
     // 任务结束，宿主也会顺手把这条 handle 从它的登记表里收掉。
     shellActivity: false,
     graceMs: TERMINATE_GRACE_MS,
-    ...(sessionId !== undefined && sessionId.length > 0
-      ? { env: { DSH_SESSION_ID: sessionId } }
-      : {}),
+    ...(Object.keys(env).length > 0 ? { env } : {}),
   });
 }
 
