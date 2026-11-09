@@ -21,7 +21,7 @@ const { expandVariables } = await import(new URL('../lib/config.js', import.meta
 const { matchReady, renderCommandLine } = await import(new URL('../lib/exec.js', import.meta.url));
 const { resolveServerReady, resolveOnReady, wouldCycle, initialHookState, observeLine } =
   await import(new URL('../lib/hooks.js', import.meta.url));
-const { dispatchToolArgs, TOOL_NAME } = await import(new URL('../lib/tool.js', import.meta.url));
+const { dispatchToolArgs, createToolEntry, TOOL_NAME } = await import(new URL('../lib/tool.js', import.meta.url));
 const { readLayout, writeLayout, effectiveButtons, coerceLayout } = await import(
   new URL('../lib/store.js', import.meta.url)
 );
@@ -931,6 +931,133 @@ await check('成功返回体只用下划线字段名（模型侧是 snake_case�
   for (const key of keys) assert.ok(!/[A-Z]/u.test(key), `不该出现驼峰键：${key}`);
   assert.ok(keys.includes('entry_id'));
   assert.ok(keys.includes('run_id'));
+});
+
+/* ── action=create：agent 帮用户加启动按钮的那条路（与「+」面板同一条链路） ── */
+
+await check('action=create 落进 create 调用（label+command+project_root）', async () => {
+  const fake = fakeHost(ENTRIES);
+  fake.host.create = async (projectRoot, input) => {
+    fake.calls.push({ kind: 'create', projectRoot, input });
+    return { ok: true, entryId: 'dev-server' };
+  };
+  const result = await dispatchToolArgs(
+    { action: 'create', label: 'dev server', command: 'npm run dev', project_root: 'D:/jin', is_background: true, ready_pattern: 'http://\\\\S+' },
+    fake.host,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.entry_id, 'dev-server');
+  assert.deepEqual(fake.calls[0], {
+    kind: 'create',
+    projectRoot: 'D:/jin',
+    input: { label: 'dev server', command: 'npm run dev', isBackground: true, readyPattern: 'http://\\\\S+' },
+  });
+});
+
+await check('action=create 缺 project_root 时用会话 cwd，再缺才报错', async () => {
+  const fake = fakeHost(ENTRIES);
+  fake.host.create = async (projectRoot) => {
+    fake.calls.push({ kind: 'create', projectRoot });
+    return { ok: true, entryId: 'x' };
+  };
+  fake.host.sessionCwd = () => 'D:/jin';
+  const result = await dispatchToolArgs(
+    { action: 'create', label: 'l', command: 'echo hi' },
+    fake.host,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(fake.calls[0].projectRoot, 'D:/jin');
+  // 连会话 cwd 都没有 → 明确报错，不猜
+  const noCwd = fakeHost(ENTRIES);
+  noCwd.host.create = async () => ({ ok: true, entryId: 'x' });
+  const refused = await dispatchToolArgs({ action: 'create', label: 'l', command: 'echo hi' }, noCwd.host);
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /project_root/);
+});
+
+await check('action=create 缺 label/command 时报错，不发起调用', async () => {
+  const fake = fakeHost(ENTRIES);
+  fake.host.create = async () => ({ ok: true, entryId: 'x' });
+  const noLabel = await dispatchToolArgs({ action: 'create', command: 'echo hi' }, fake.host);
+  assert.equal(noLabel.ok, false);
+  assert.match(noLabel.message, /label/);
+  const noCommand = await dispatchToolArgs({ action: 'create', label: 'l' }, fake.host);
+  assert.equal(noCommand.ok, false);
+  assert.match(noCommand.message, /command/);
+  assert.equal(fake.calls.length, 0, '缺必填项时不该发起 create 调用');
+});
+
+await check('action=create 失败时把原因（含 hint）带回，不假装成功', async () => {
+  const fake = fakeHost(ENTRIES);
+  fake.host.create = async () => ({ ok: false, message: '工作目录不存在：D:/nope', hint: '填项目里已有的目录' });
+  const result = await dispatchToolArgs(
+    { action: 'create', label: 'l', command: 'echo hi', project_root: 'D:/jin' },
+    fake.host,
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.message, /工作目录不存在/);
+  assert.match(result.message, /填项目里已有的目录/);
+});
+
+await check('宿主面没提供 create 时 action=create 明确拒绝（老测试替身不悄悄降级）', async () => {
+  const fake = fakeHost(ENTRIES); // host.create 不存在
+  const result = await dispatchToolArgs(
+    { action: 'create', label: 'l', command: 'echo hi', project_root: 'D:/jin' },
+    fake.host,
+  );
+  assert.equal(result.ok, false);
+  assert.match(result.message, /create/);
+});
+
+await check('createToolEntry：把 manager 的 `entry` 映射成 entryId 并钉条（字段名陷阱）', async () => {
+  const calls = [];
+  const okManager = {
+    createTask: async (projectRoot, input) => {
+      calls.push({ kind: 'create', projectRoot, input });
+      return { ok: true, entry: 'dev-server', projectRoot };
+    },
+    setButtonOverride: async (entry, override) => {
+      calls.push({ kind: 'pin', entry, override });
+      return { ok: true, entry };
+    },
+  };
+  const result = await createToolEntry(okManager, 'D:/jin', { label: 'dev', command: 'npm run dev' });
+  assert.deepEqual(result, { ok: true, entryId: 'dev-server' });
+  assert.deepEqual(calls.map((c) => c.kind), ['create', 'pin']);
+  assert.deepEqual(calls[1], { kind: 'pin', entry: 'dev-server', override: { pinned: true } });
+});
+
+await check('createToolEntry：钉条失败不推翻"条目已建成"，把原因带回', async () => {
+  const failPin = {
+    createTask: async () => ({ ok: true, entry: 'dev-server', projectRoot: 'D:/jin' }),
+    setButtonOverride: async () => ({ ok: false, code: 'FS', message: '写不了本地覆盖文件' }),
+  };
+  const result = await createToolEntry(failPin, 'D:/jin', { label: 'dev', command: 'npm run dev' });
+  assert.equal(result.ok, true);
+  assert.equal(result.entryId, 'dev-server');
+  assert.match(result.message, /钉到按钮条失败/);
+});
+
+await check('createToolEntry：manager 拒绝时原样带回（不钉条）', async () => {
+  let pinned = false;
+  const reject = {
+    createTask: async () => ({ ok: false, code: 'BAD', message: '缺命令' }),
+    setButtonOverride: async () => { pinned = true; return { ok: true, entry: 'x' }; },
+  };
+  const result = await createToolEntry(reject, 'D:/jin', { label: 'dev', command: ' ' });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /缺命令/);
+  assert.equal(pinned, false, '没建成就不该写 layout.json');
+});
+
+await check('createToolEntry：manager 返回 ok 但没给 id 时报错（不静默变成 undefined）', async () => {
+  const noId = {
+    createTask: async () => ({ ok: true, projectRoot: 'D:/jin' }),
+    setButtonOverride: async () => ({ ok: true }),
+  };
+  const result = await createToolEntry(noId, 'D:/jin', { label: 'dev', command: 'npm run dev' });
+  assert.equal(result.ok, false);
+  assert.match(result.message, /没拿到它的 id/);
 });
 
 /* ── configPath 的两种形态（回归：曾经把 <x>/.dsh/run-deck/run.json 读成 <x>/.dsh/.dsh/run-deck/run.json）── */

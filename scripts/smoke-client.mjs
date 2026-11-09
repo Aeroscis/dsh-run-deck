@@ -230,9 +230,72 @@ await (async () => {
   });
 
   await check('＋＝只负责新建、☰＝管理（排序 + 收起 + 删除）', () => {
-    for (const key of ['createTitle', 'createHint', 'manageTitle', 'deleteEntry', 'deleteConfirm', 'deleteCancel']) {
+    for (const key of ['createTitle', 'createHelp', 'helpToggle', 'manageTitle', 'deleteEntry', 'deleteConfirm', 'deleteCancel']) {
       assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
       assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
+    }
+    // 那段常驻说明已收进「?」介绍框：字典里不该再有 createHint / commandSplitHint。
+    assert.equal(Object.keys(x.ZH).includes('createHint'), false, 'createHint 应已删除（收进 ? 介绍框）');
+    assert.equal(Object.keys(x.ZH).includes('commandSplitHint'), false, 'commandSplitHint 应已删除（纯废话）');
+  });
+
+  await check('「?」介绍框：默认收起，点开才出现（标题旁那颗问号钮）', () => {
+    const { exported, flushComponent } = loadPlugin({ interactive: true });
+    const internals = exported.internals;
+    const props = {
+      entries: [],
+      runtime: { t: (key) => internals.ZH[key] ?? key, locale: 'zh' },
+      projectRoot: 'D:/p',
+      onClosePanel: () => {},
+      onCreateTask: async () => ({ ok: true, entry: 'x' }),
+    };
+    const tree = flushComponent(internals.AddPanel, props);
+    const texts = [];
+    const walk = (node) => {
+      if (node === null || node === undefined) return;
+      if (typeof node === 'string') { texts.push(node); return; }
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (typeof node === 'object') walk(node.children);
+    };
+    walk(tree);
+    assert.ok(texts.includes('?'), '标题旁应该有一颗问号钮');
+    assert.ok(!texts.includes(internals.ZH.createHelp), '介绍框默认不该展开');
+    // 找到那颗问号钮并点开
+    let helpButton = null;
+    const findBtn = (node) => {
+      if (node === null || node === undefined) return;
+      if (Array.isArray(node)) { node.forEach(findBtn); return; }
+      if (typeof node !== 'object') return;
+      if (node.type === 'button' && node.children?.includes('?')) helpButton = node;
+      findBtn(node.children);
+    };
+    findBtn(tree);
+    assert.notEqual(helpButton, null, '找不到问号钮');
+    helpButton.props.onClick();
+    const opened = flushComponent(internals.AddPanel, props);
+    const openedTexts = [];
+    const collect = (node) => {
+      if (node === null || node === undefined) return;
+      if (typeof node === 'string') { openedTexts.push(node); return; }
+      if (Array.isArray(node)) { node.forEach(collect); return; }
+      if (typeof node === 'object') collect(node.children);
+    };
+    collect(opened);
+    assert.ok(openedTexts.includes(internals.ZH.createHelp), '点开后介绍文字要出现');
+    // 「对 agent 说什么」是另一段，带自己的类名（加粗 + 框起来），不能只是并进正文。
+    assert.ok(openedTexts.includes(internals.ZH.createHelpAgent), '点开后要教用户怎么跟 agent 开口');
+    const classesOf = (node, out = new Set()) => {
+      if (node === null || node === undefined) return out;
+      if (Array.isArray(node)) { node.forEach((child) => classesOf(child, out)); return out; }
+      if (typeof node !== 'object') return out;
+      const cls = node.props?.className;
+      if (typeof cls === 'string') cls.split(/\s+/u).forEach((name) => name.length > 0 && out.add(name));
+      classesOf(node.children, out);
+      return out;
+    };
+    const openedClasses = classesOf(opened);
+    for (const cls of ['__ru_helpBox', '__ru_helpText', '__ru_helpAgent']) {
+      assert.ok(openedClasses.has(cls), `点开后缺 ${cls}`);
     }
   });
 
@@ -355,7 +418,7 @@ await (async () => {
     const zh = Object.keys(x.ZH);
     for (const key of [
       'run', 'stop', 'densityFull', 'densityCompact', 'densityIcon', 'densityCycle',
-      'overflow', 'add', 'settings', 'createTitle', 'createHint', 'manageTitle',
+      'overflow', 'add', 'settings', 'createTitle', 'createHelp', 'helpToggle', 'manageTitle',
       'addPinned', 'addUnpinned',
       'addPin', 'addHide', 'settingsTitle', 'settingsDensity', 'settingsRuns',
       'settingsWarnings', 'settingsCapability', 'noFocus',
@@ -696,7 +759,7 @@ await (async () => {
       'fieldBackground', 'fieldReady', 'fieldOpenUrl', 'fieldUrlPattern', 'fieldUriFormat',
       'fieldReveal', 'fieldOnReady', 'fieldIcon', 'fieldButtonGroup',
       'detectTitle', 'detectHint', 'detectLoading', 'detectEmpty', 'detectExists', 'detectTemplates',
-      'moreShow', 'moreHide', 'copyTitle', 'copyPlaceholder', 'commandSplitHint', 'createdNote',
+      'moreShow', 'moreHide', 'copyTitle', 'copyPlaceholder', 'copyHint', 'createdNote',
     ]) {
       assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
       assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);

@@ -325,7 +325,8 @@ host half spawn 的进程**绕过 agent 的 pwsh 沙箱**，所以：
   - **可以复制已有条目**：拿的是清单里**原样**的字段（`raw`），所以 `${workspaceFolder}`
     不会被展开成这台机器的绝对路径；`id` 不复制（副本要自己的 id）。
   - **基础只有两栏**：名称 + 一行命令行。命令行由 host 拆成 `command` + `args`
-    （`npm run dev` → `npm` + `["run","dev"]`），界面上有一句说明，避免"整行塞进 command"。
+    （`npm run dev` → `npm` + `["run","dev"]`）；引号不配对由提交时的校验拦住并说明原因。
+  - **标题旁一颗「?」**：面板是做什么的、怎么用，点开才展开（默认不占地方）。
   - **「更多设置」里是 `run.json` 的那 9 个字段**：工作目录（相对项目根解析成绝对路径
     再交给 PTY）、环境变量（`KEY=value` 每行一条）、显式 `id`、`group`、`isBackground`、
     就绪正则（`problemMatcher.background.endsPattern`）、就绪后打开地址
@@ -650,13 +651,21 @@ Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-run-deck' -List | Select-
 | `run` | `entry_id` | 按 id 精确定位并发起 |
 | `stop` | `run_id` | 停掉一个 run |
 | `rerun` | `run_id` | 停掉旧的再开新的，返回新 runId |
+| `create` | `label` + `command`（+ `project_root?` / `is_background?` / `ready_pattern?`） | 帮用户加一个启动按钮：与「+」面板同一条链路（校验 + 写进项目 run.json），按钮条 ≤3s 出现。缺 `project_root` 时用调用会话的 cwd |
 
-工具描述里**内联当前可用的条目清单**，模型调用前就知道有哪些 id。
+工具描述里**内联当前可用的条目清单**，模型调用前就知道有哪些 id；
+`action=create` 的说明也写在描述里——用户对 agent 说"帮我加个跑 XXX 的按钮"，模型
+不需要任何注入的 prompt 就知道调它。直接编辑 run.json 同样合法（mtime 轮询 ≤2.5s 感知，
+`buttons[]` 缺省时全部条目默认上条）。
 返回体的字段名是 `entry_id` / `run_id` 这样的下划线形式（与其它 dsh-tool-* 一致）。
 
-安全边界与 HTTP 路由完全一致：**只接受 id，不接受命令**。
+安全边界与 HTTP 路由一致：**执行类动作（run/stop/rerun）只接受 id，不接受命令**。
 `entry_id` 里出现 `python x.py`、`npm run dev` 这类形态一律按"未知 id"拒绝，
 **不回落按 label 匹配**（label 可重名，不能当接口）。
+
+`create` 是唯一接受自由文本的动作，但它写的是**清单**而不是执行：字段由
+`buildTaskEntry` 逐项校验（坏正则、不存在的目录、撞车的 id 都拒绝落盘），产出的
+`TaskEntry` 与手写进 `run.json` 的一条完全等价——执行仍然只认清单里的字面量。
 
 `@deepseek-ai/dsh-tools` 是**可选依赖**（动态 import）：宿主没装时插件照常加载，
 只是少这一个入口，日志里会写清原因。

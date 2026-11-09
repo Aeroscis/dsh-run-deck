@@ -21,6 +21,7 @@
 import { renderCommandLine } from './exec.js';
 import { messageOf } from './sessions.js';
 import type { RunDeckManager } from './manager.js';
+import type { NewTaskInput } from './types.js';
 
 /** `@deepseek-ai/dsh-tools` 导出的 defineTool（动态 import，缺失即降级）。 */
 type DshDefineTool = (definition: DshToolDefinition) => unknown;
@@ -28,11 +29,15 @@ type DshDefineTool = (definition: DshToolDefinition) => unknown;
 /** tool 名（模型看到的就是这个）。 */
 export const TOOL_NAME = 'run-deck';
 
-/** 工具描述：说清"它只跑 run.json 里声明过的东西"。 */
+/** 工具描述：说清"它只跑 run.json 里声明过的东西"、以及条目怎么来（可建可手改）。 */
 const TOOL_DESCRIPTION = [
   'Run a configured entry from a project’s .dsh/run-deck/run.json (VS Code tasks.json vocabulary).',
   'The entry must already exist in that manifest: this tool never accepts a free-form command.',
   'Use it to start, stop, or rerun a declared launcher — for example a dev server or build script.',
+  'When the user asks to add a launch button for this workspace (e.g. "帮我加一个跑 dev server 的按钮"),',
+  'use action=create with label + command (one line, e.g. "npm run dev"); it validates, writes the entry',
+  'into that project’s .dsh/run-deck/run.json and the button appears on the floating bar within ~3s.',
+  'Editing that manifest by hand is equally valid — buttons appear automatically.',
   'Call /run-deck list first when you do not know the entry id.',
 ].join(' ');
 
@@ -41,7 +46,7 @@ const PARAMETERS = {
   action: {
     type: 'string',
     required: true,
-    enum: ['run', 'stop', 'rerun'],
+    enum: ['run', 'stop', 'rerun', 'create'],
     description: 'Which action to take on the entry or the run.',
   },
   entry_id: {
@@ -51,6 +56,29 @@ const PARAMETERS = {
   run_id: {
     type: 'string',
     description: 'Run id returned by a previous action. Required for action=stop and action=rerun.',
+  },
+  project_root: {
+    type: 'string',
+    description: 'Project root for action=create. Defaults to the calling agent session’s cwd.',
+  },
+  label: {
+    type: 'string',
+    description: 'Human-readable name for the new entry. Required for action=create.',
+  },
+  command: {
+    type: 'string',
+    description:
+      'One command line for the new entry, e.g. "npm run dev". Required for action=create.',
+  },
+  is_background: {
+    type: 'boolean',
+    description:
+      'Mark the new entry long-running (server that stays up). Only for action=create.',
+  },
+  ready_pattern: {
+    type: 'string',
+    description:
+      'Regex source (no surrounding slashes); a match marks the run ready, e.g. "(https?://\\S+)". Optional.',
   },
 } as const;
 
@@ -95,13 +123,45 @@ function flatten(input: {
 }
 
 /**
+ * `action=create` 的宿主面实现：manager.createTask → 钉到按钮条。
+ *
+ * 单独导出是为了可测：注册过程要 `ctx.tools` + 动态 import，离线跑不了；
+ * 而"返回体字段名、钉条失败怎么报"正是容易悄悄写错的地方（实测写错过一次：
+ * manager 返回的是 `entry`，不是 `entryId`，类型上可选所以编译不报）。
+ */
+export async function createToolEntry(
+  manager: Pick<RunDeckManager, 'createTask' | 'setButtonOverride'>,
+  projectRoot: string,
+  input: NewTaskInput,
+): Promise<{ ok: boolean; message?: string; entryId?: string }> {
+  const created = await manager.createTask(projectRoot, input);
+  if (!created.ok) return created;
+  const entryId = created.entry;
+  if (typeof entryId !== 'string' || entryId.length === 0) {
+    return { ok: false, message: '条目已写入清单，但没拿到它的 id（请用 /run-deck list 确认）' };
+  }
+  // 与「+」面板一致：建完顺手钉到按钮条（写本机 layout.json）。
+  // 钉条失败不推翻"条目已建成"——条目是 run.json 里的真东西，外观才是本机的。
+  const pinned = await manager.setButtonOverride(entryId, { pinned: true });
+  return {
+    ok: true,
+    entryId,
+    ...(pinned.ok ? {} : { message: `条目已建成，但钉到按钮条失败：${pinned.message}` }),
+  };
+}
+
+/**
  * 工具参数 → manager 调用。
  *
  * 抽成独立函数是为了可测：注册过程要 `ctx.tools` + 动态 import，离线跑不了；
  * 而"给了什么参数、映射到哪个调用、拒绝什么"正是安全边界所在，必须自己可验证
  * （沙箱里管道 stdio 会失败，起不了宿主）。
  *
- * 约束与 HTTP 路由一致：**只接受 id，不接受命令**。
+ * 约束与 HTTP 路由一致：**run/stop/rerun 只接受 id，不接受命令**。
+ * `create` 是另一个动作：它写一条**新**条目进清单（与「+」面板同一条链路，
+ * 校验、落盘、写的是哪个文件全在 manager 里），不是"按名字执行自由命令"的口子——
+ * 所以它的 host 面是可选的：宿主面没提供 create（老版本测试替身）时明确报错，
+ * 绝不悄悄降级成别的动作。
  */
 export async function dispatchToolArgs(
   args: Record<string, unknown>,
@@ -110,9 +170,60 @@ export async function dispatchToolArgs(
     run(projectRoot: string, entryId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string }>;
     stop(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
     rerun(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
+    /** 「+」面板同款新建（可选：不提供就拒绝 action=create）。 */
+    create?(projectRoot: string, input: NewTaskInput): Promise<{ ok: boolean; message?: string; hint?: string; entryId?: string }>;
+    /** 当前调用会话的 cwd（action=create 缺 project_root 时的落点；可选）。 */
+    sessionCwd?(): string | undefined;
   },
 ): Promise<Record<string, unknown>> {
   const action = typeof args['action'] === 'string' ? args['action'].trim() : '';
+
+  if (action === 'create') {
+    if (host.create === undefined) {
+      return flatten({ ok: false, message: '这个入口不支持 create' });
+    }
+    const label = typeof args['label'] === 'string' ? args['label'].trim() : '';
+    const command = typeof args['command'] === 'string' ? args['command'].trim() : '';
+    const missing: string[] = [];
+    if (label.length === 0) missing.push('label');
+    if (command.length === 0) missing.push('command');
+    if (missing.length > 0) {
+      return flatten({ ok: false, message: `action=create 需要 ${missing.join(' 和 ')}` });
+    }
+    let projectRoot =
+      typeof args['project_root'] === 'string' ? args['project_root'].trim() : '';
+    if (projectRoot.length === 0) projectRoot = host.sessionCwd?.() ?? '';
+    if (projectRoot.length === 0) {
+      return flatten({
+        ok: false,
+        message: 'action=create 需要 project_root（或一个能解析出 cwd 的调用会话）',
+      });
+    }
+    const input: NewTaskInput = {
+      label,
+      command,
+      ...(args['is_background'] === true ? { isBackground: true } : {}),
+      ...(typeof args['ready_pattern'] === 'string' && args['ready_pattern'].trim().length > 0
+        ? { readyPattern: args['ready_pattern'].trim() }
+        : {}),
+    };
+    const result = await host.create(projectRoot, input);
+    if (!result.ok) {
+      return flatten({
+        ok: false,
+        message: result.hint !== undefined ? `${result.message}（${result.hint}）` : result.message,
+      });
+    }
+    return flatten({
+      ok: true,
+      entry_id: result.entryId,
+      label,
+      // 宿主面可能在"条目已建成但钉条失败"时带回自己的说明，优先用它。
+      message:
+        result.message ??
+        `已写进 ${projectRoot} 的 .dsh/run-deck/run.json，按钮条最多 3 秒内出现`,
+    });
+  }
 
   if (action === 'run') {
     const entryId = typeof args['entry_id'] === 'string' ? args['entry_id'].trim() : '';
@@ -155,9 +266,9 @@ export async function dispatchToolArgs(
   }
 
   if (action.length === 0) {
-    return flatten({ ok: false, message: '缺少 action（可用 run / stop / rerun）' });
+    return flatten({ ok: false, message: '缺少 action（可用 run / stop / rerun / create）' });
   }
-  return flatten({ ok: false, message: `未知 action：${action}（可用 run / stop / rerun）` });
+  return flatten({ ok: false, message: `未知 action：${action}（可用 run / stop / rerun / create）` });
 }
 
 /** 供 `dispatchToolArgs` 用的最小 manager 面（也便于测试替身）。 */
@@ -166,6 +277,10 @@ export interface RunDeckToolHost {
   run(projectRoot: string, entryId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string }>;
   stop(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
   rerun(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
+  /** 「+」面板同款新建（可选：不提供就拒绝 action=create）。 */
+  create?(projectRoot: string, input: NewTaskInput): Promise<{ ok: boolean; message?: string; hint?: string; entryId?: string }>;
+  /** 当前调用会话的 cwd（action=create 缺 project_root 时的落点；可选）。 */
+  sessionCwd?(): string | undefined;
 }
 
 /**
@@ -207,6 +322,7 @@ export async function registerRunDeckTool(
     run: (projectRoot, entryId) => manager.startRun({ projectRoot, entryId }),
     stop: (runId) => manager.stopRun(runId),
     rerun: (runId) => manager.rerun(runId),
+    create: (projectRoot, input) => createToolEntry(manager, projectRoot, input),
   };
 
   /** 工具描述里要带的条目清单（模型先看这里就知道有哪些 id）。 */
@@ -251,6 +367,9 @@ export async function registerRunDeckTool(
           }),
         stop: (runId) => manager.stopRun(runId),
         rerun: (runId) => manager.rerun(runId),
+        create: host.create,
+        // action=create 缺 project_root 时，用**本次调用会话**的 cwd 当落点。
+        sessionCwd: () => exec?.agent?.session?.header?.cwd,
       };
       const result = await dispatchToolArgs(args, callHost);
       // 成功时补上命令行和 cwd——让模型（和人）一眼看出"这一条到底跑什么"。

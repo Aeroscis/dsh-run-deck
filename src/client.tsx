@@ -89,7 +89,11 @@ const ZH: Record<string, string> = {
   add: '添加按钮',
   settings: '设置',
   createTitle: '新建启动项',
-  createHint: '填名称和一行命令就够了；工作目录、环境变量、就绪正则这些收在「更多设置」里。创建后会写进这个项目的 .dsh/run-deck/run.json，并自动钉到按钮条。',
+  helpToggle: '这个面板是做什么的',
+  createHelp:
+    '给当前工作区建一个「启动项」：一个按钮，点它就在项目里跑一条固定命令（dev server、构建、测试这类）。\n\n填名称和一行命令就能建；上面的候选点一下自动填。工作目录、环境变量、就绪正则这些在「更多设置」里。\n\n条目写进项目的 .dsh/run-deck/run.json（和手改同一个文件，可以进 git），创建后自动钉到上面的按钮条。',
+  createHelpAgent:
+    '不想自己填：对 agent 说「帮我加一个跑 dev server 的按钮」就行——它会用 run-deck 工具写进同一个 run.json，按钮条上就会出现。要改已有条目，让它直接编辑 .dsh/run-deck/run.json。',
   detectTitle: '从项目里检测',
   detectHint: '点一条就填进下面的表单（填进去之后仍然可以改）。',
   detectLoading: '正在读 package.json…',
@@ -97,9 +101,9 @@ const ZH: Record<string, string> = {
   detectExists: '已在清单',
   detectTemplates: '通用模板',
   detectScripts: 'package.json 的 scripts',
-  commandSplitHint: '第一个词是命令，其余是参数（含空格的参数用引号）。',
   copyTitle: '从已有条目复制',
-  copyPlaceholder: '选择一条…（复制命令、目录、环境变量、就绪正则；id 不复制）',
+  copyPlaceholder: '选择一条…',
+  copyHint: '复制选中条目的命令与运行参数填进表单（id 不复制）',
   moreShow: '展开更多设置',
   moreHide: '收起更多设置',
   fieldName: '名称',
@@ -206,7 +210,11 @@ const EN: Record<string, string> = {
   add: 'Add button',
   settings: 'Settings',
   createTitle: 'New launch entry',
-  createHint: 'A name and a one-line command are enough; working directory, env vars and ready patterns live under "More settings". It is written into this project’s .dsh/run-deck/run.json and pinned to the bar.',
+  helpToggle: 'What this panel does',
+  createHelp:
+    'Adds a launch entry to this workspace: a button that runs one fixed command in the project (a dev server, a build, tests).\n\nA name and a one-line command are enough; detected candidates above fill the form in one click. Working directory, env vars and ready patterns live under "More settings".\n\nThe entry is written into the project’s .dsh/run-deck/run.json (the same file you could edit by hand; it can go into git) and pinned to the bar above.',
+  createHelpAgent:
+    'Rather not fill it in? Tell your agent: "add a launch button that runs npm run dev" — it uses the run-deck tool to write the same run.json, and the button appears on the bar. To change existing entries, ask it to edit .dsh/run-deck/run.json directly.',
   detectTitle: 'Detected in this project',
   detectHint: 'Click one to fill the form below (you can still change every field).',
   detectLoading: 'Reading package.json…',
@@ -214,9 +222,9 @@ const EN: Record<string, string> = {
   detectExists: 'already in manifest',
   detectTemplates: 'Templates',
   detectScripts: 'package.json scripts',
-  commandSplitHint: 'First word is the command, the rest are arguments (quote arguments containing spaces).',
   copyTitle: 'Copy an existing entry',
-  copyPlaceholder: 'Pick one… (copies command, cwd, env and ready patterns; not the id)',
+  copyPlaceholder: 'Pick one…',
+  copyHint: 'Copies the selected entry’s command and run options into the form (not the id)',
   moreShow: 'More settings',
   moreHide: 'Hide extra settings',
   fieldName: 'Name',
@@ -463,6 +471,16 @@ const CSS = [
   // 新会话输入框居中、条在屏幕中间，面板顶部会被裁在视口外（见 popupSpaceFor）。
   `.__ru_pop{position:absolute;z-index:10;bottom:calc(100% + ${POPUP_OFFSET}px);left:0;right:0;box-sizing:border-box;max-height:min(70vh,460px,var(${POPUP_SPACE_VAR},100vh));overflow:auto;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 12px 40px rgba(0,0,0,.28);color:var(--dsw-alias-label-primary);font-size:13px}`,
   '.__ru_popTitle{margin:0 0 4px;font-size:14px;font-weight:600}',
+  // 标题旁的「?」介绍钮：与标题同行、小圆钮、可聚焦（title/aria-label 写明它开什么）。
+  '.__ru_helpToggle{margin-left:6px;width:18px;height:18px;padding:0;border:1px solid var(--dsw-alias-border-l2);border-radius:50%;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;line-height:1;vertical-align:middle;cursor:pointer}',
+  '.__ru_helpToggle:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-l3)}',
+  '.__ru_helpToggle:focus-visible{outline:none;border-color:var(--dsw-alias-brand-primary,#d8863b)}',
+  // 「?」展开的介绍框：比 hint 高一档的可见面（这是"是什么/怎么用"，值得站住）。
+  '.__ru_helpBox{margin:0 0 10px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);word-break:break-word}',
+  '.__ru_helpText{margin:0;white-space:pre-wrap}',
+  // 「对 agent 说什么」单独框起来加粗：它和上面那段"表单怎么填"不是一回事，
+  // 混在正文里会被当成说明文字跳过。
+  '.__ru_helpAgent{margin:8px 0 0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l3);border-radius:8px;background:var(--dsw-alias-bg-layer-1);font-weight:600;color:var(--dsw-alias-label-primary);white-space:pre-wrap}',
   // 「+」面板比别的弹层高：它有表单，展开「更多设置」后行数不少。
   // 上限除了 80vh/620px，同样要夹一道 `--ru-pop-space`——面板越高，越容易撞上"条在屏幕中间"。
   `.__ru_pop.__ru_popTall{max-height:min(80vh,620px,var(${POPUP_SPACE_VAR},100vh))}`,
@@ -1837,6 +1855,8 @@ function AddPanel(props: BarProps): React.ReactElement {
   const [command, setCommand] = React.useState('');
   // 「更多设置」
   const [more, setMore] = React.useState(false);
+  /** 「?」介绍框：默认收起。里面是"这个面板是什么、怎么用"的完整版说明。 */
+  const [helpOpen, setHelpOpen] = React.useState(false);
   const [cwd, setCwd] = React.useState('');
   const [envText, setEnvText] = React.useState('');
   const [background, setBackground] = React.useState(false);
@@ -2032,8 +2052,26 @@ function AddPanel(props: BarProps): React.ReactElement {
 
   return (
     <div>
-      <h4 className="__ru_popTitle">{runtime.t('createTitle')}</h4>
-      <p className="__ru_popHint">{runtime.t('createHint')}</p>
+      <h4 className="__ru_popTitle">
+        {runtime.t('createTitle')}
+        <button
+          type="button"
+          className="__ru_helpToggle"
+          aria-expanded={helpOpen}
+          title={runtime.t('helpToggle')}
+          aria-label={runtime.t('helpToggle')}
+          onClick={() => setHelpOpen(!helpOpen)}
+        >
+          ?
+        </button>
+      </h4>
+      {helpOpen ? (
+        <div className="__ru_helpBox">
+          <p className="__ru_helpText">{runtime.t('createHelp')}</p>
+          {/* 用户视角的触发语：加粗 + 框起来，别让它混在说明正文里被跳过。 */}
+          <p className="__ru_helpAgent">{runtime.t('createHelpAgent')}</p>
+        </div>
+      ) : null}
       {error !== null ? <p className="__ru_error">❌ {error}</p> : null}
       {created !== null ? (
         pinError === null ? (
@@ -2088,8 +2126,11 @@ function AddPanel(props: BarProps): React.ReactElement {
               value=""
               onChange={(event) => copyFrom(event.target.value)}
               aria-label={runtime.t('copyTitle')}
+              title={runtime.t('copyHint')}
             >
-              <option value="">{runtime.t('copyPlaceholder')}</option>
+              {/* 占位项不是可选项：disabled + hidden 让它只当"未选"的显示值，
+                  展开列表里不会再出现一条"选择一条…"的假选项。 */}
+              <option value="" disabled hidden>{runtime.t('copyPlaceholder')}</option>
               {entries.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {entry.label}
@@ -2135,9 +2176,6 @@ function AddPanel(props: BarProps): React.ReactElement {
             />
           </div>
         </div>
-        <p className="__ru_fieldHint" style={{ paddingLeft: 100 }}>
-          {runtime.t('commandSplitHint')}
-        </p>
       </div>
 
       <button
