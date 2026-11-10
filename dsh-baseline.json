@@ -1,0 +1,70 @@
+{
+  "$comment": "本文件由 node scripts/compat-probe.mjs --write-baseline 生成，记录确认可用的宿主版本与接口表面，供后续升级比对。",
+  "runtime": "0.2.2-rc.1",
+  "recordedAt": "2026-11-09T16:44:18.493Z",
+  "surface": {
+    "hostServices": {
+      "webServer": {
+        "provided": true,
+        "provider": "dsh-host-webserver",
+        "missingMembers": []
+      },
+      "commands": {
+        "provided": true,
+        "provider": "dsh-commands",
+        "missingMembers": []
+      },
+      "tools": {
+        "provided": true,
+        "provider": "dsh-tools",
+        "missingMembers": []
+      },
+      "subprocess": {
+        "provided": true,
+        "provider": "dsh-subprocess, dsh-subprocess-local",
+        "missingMembers": []
+      }
+    },
+    "clientServices": {
+      "slots": {
+        "provided": true,
+        "provider": "dsh-client-ui-renderer",
+        "missingMembers": []
+      },
+      "sessions": {
+        "provided": true,
+        "provider": "dsh-session",
+        "missingMembers": []
+      }
+    },
+    "slots": {
+      "conversation.input.dock": {
+        "declared": true,
+        "kind": "list",
+        "scope": "session"
+      }
+    },
+    "packages": {
+      "@deepseek-ai/dsh-tools": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-host-webserver": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-subprocess": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-client-ui-conversation": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      }
+    }
+  }
+}

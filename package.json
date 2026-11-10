@@ -58,7 +58,9 @@
     "smoke:host": "node scripts/smoke.mjs",
     "smoke:client": "node scripts/smoke-client.mjs",
     "check:registration": "node scripts/check-registration.mjs",
-    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration"
+    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration && node test/compat-rules.test.mjs",
+    "compat": "node scripts/compat-probe.mjs",
+    "compat:baseline": "node scripts/compat-probe.mjs --write-baseline"
   },
   "dsh": {
     "bundle": {
