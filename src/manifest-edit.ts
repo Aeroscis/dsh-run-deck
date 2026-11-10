@@ -413,6 +413,39 @@ function parseElementObject(slice: string): Record<string, unknown> | undefined 
   }
 }
 
+/**
+ * 在 tasks[] 的元素范围里定位"界面看到的 id"对应的那一个元素。
+ *
+ * 按"解析后的 id"匹配：与 resolveEntries() 的规则**逐字对齐**——
+ *   有显式 id：未被占用用显式 id；被占用时从 **id 串**派生（`${entry.id}`）；
+ *   没有显式 id：从 label 派生。
+ * 早先这里冲突兜底走的是 label，清单里出现两条相同显式 id 时，
+ * "界面看到的 id"和这里的定位就会分叉 → 删错或删不到。
+ */
+function locateTaskElement(
+  text: string,
+  taskRanges: ArrayElementRange[],
+  entryId: string,
+): number {
+  const taken = new Set<string>();
+  for (let index = 0; index < taskRanges.length; index += 1) {
+    const range = taskRanges[index] as ArrayElementRange;
+    const element = parseElementObject(text.slice(range.start, range.end));
+    if (element === undefined) continue;
+    const explicit = typeof element['id'] === 'string' && element['id'].length > 0 ? element['id'] : undefined;
+    const label = typeof element['label'] === 'string' ? element['label'] : '';
+    const id =
+      explicit !== undefined && !taken.has(explicit)
+        ? explicit
+        : explicit !== undefined
+          ? deriveId(explicit, taken)
+          : deriveId(label || 'task', taken);
+    taken.add(id);
+    if (id === entryId) return index;
+  }
+  return -1;
+}
+
 export type RemoveTaskResult = { ok: true; text: string; entry: string } | { ok: false; message: string };
 
 /**
@@ -431,27 +464,7 @@ export function removeTaskFromManifestText(text: string, entryId: string): Remov
   if (tasksRange === null) return { ok: false, message: '清单里没有 tasks[]' };
   const taskRanges = arrayElementRanges(text, tasksRange.start, tasksRange.end);
 
-  // 按"解析后的 id"匹配：与 resolveEntries() 的规则**逐字对齐**——
-  //   有显式 id：未被占用用显式 id；被占用时从 **id 串**派生（`${entry.id}`）；
-  //   没有显式 id：从 label 派生。
-  // 早先这里冲突兜底走的是 label，清单里出现两条相同显式 id 时，
-  // "界面看到的 id"和这里的定位就会分叉 → 删错或删不到。
-  const taken = new Set<string>();
-  let target = -1;
-  for (let index = 0; index < taskRanges.length; index += 1) {
-    const element = parseElementObject(text.slice((taskRanges[index] as ArrayElementRange).start, (taskRanges[index] as ArrayElementRange).end));
-    if (element === undefined) continue;
-    const explicit = typeof element['id'] === 'string' && element['id'].length > 0 ? element['id'] : undefined;
-    const label = typeof element['label'] === 'string' ? element['label'] : '';
-    const id =
-      explicit !== undefined && !taken.has(explicit)
-        ? explicit
-        : explicit !== undefined
-          ? deriveId(explicit, taken)
-          : deriveId(label || 'task', taken);
-    taken.add(id);
-    if (id === entryId) target = index;
-  }
+  const target = locateTaskElement(text, taskRanges, entryId);
   if (target < 0) return { ok: false, message: `清单里找不到 id 为 ${entryId} 的任务` };
 
   let next = removeArrayElementAt(text, taskRanges, target);
@@ -475,5 +488,72 @@ export function removeTaskFromManifestText(text: string, entryId: string): Remov
   }
 
   return { ok: true, text: next, entry: entryId };
+}
+
+/* ─────────────────────────── 替换（编辑） ─────────────────────────── */
+
+export type ReplaceTaskResult = { ok: true; text: string; entry: string } | { ok: false; message: string };
+
+/**
+ * 在清单文本里**原位替换**一条 task（按解析后的 id 定位），其余内容原样保留。
+ *
+ * 与删除共用同一套定位（`locateTaskElement`），与插入共用同一套渲染
+ * （`renderTask`）：新条目的排版和"手写一条再让界面替换"完全一致。
+ *
+ * 定位按**旧文本**做、渲染按**新条目**做，所以这天然也覆盖"改了 id / label"的
+ * 情况——旧 id 找得到位置，新 id 写进替换后的文本。数量校验是**不变**（正好 0），
+ * 不过就报错、由调用方放弃落盘。
+ *
+ * buttons[] 不用动：按钮声明的是 entry id，编辑不删除条目；id 真被改掉时
+ * manager 层会把本机布局里的旧键搬到新键（`updateTask`），清单里的
+ * `buttons[].entry` 也按同样的映射改写——这是替换之后单独的一小步。
+ */
+export function replaceTaskInManifestText(
+  text: string,
+  entryId: string,
+  task: TaskEntry,
+): ReplaceTaskResult {
+  const expected = countManifestTasks(text);
+  if (expected < 0) return { ok: false, message: '.dsh/run-deck/run.json 现在就不是合法 JSON，先修好它' };
+
+  const tasksRange = findTopLevelArray(text, 'tasks');
+  if (tasksRange === null) return { ok: false, message: '清单里没有 tasks[]' };
+  const taskRanges = arrayElementRanges(text, tasksRange.start, tasksRange.end);
+
+  const target = locateTaskElement(text, taskRanges, entryId);
+  if (target < 0) return { ok: false, message: `清单里找不到 id 为 ${entryId} 的任务` };
+
+  // 用**被替换元素自己的缩进**渲染新条目：多字段条目本来就一字段一行，
+  // 行首空白照旧，替换完清单的整体排版不变。
+  const range = taskRanges[target] as ArrayElementRange;
+  const indent = lineIndentOf(text, range.start);
+  const rendered = renderTask(task, indent);
+  const next = text.slice(0, range.start) + rendered + text.slice(range.end);
+  const counted = countManifestTasks(next);
+  if (counted !== expected) {
+    return { ok: false, message: '替换后清单校验失败，已放弃写入' };
+  }
+  return { ok: true, text: next, entry: task.id ?? entryId };
+}
+
+/** 把 buttons[] 里指向 `from` 的声明改指 `to`（id 被改名时用；没有就原样返回）。 */
+export function retargetButtonsInManifestText(text: string, from: string, to: string): string {
+  const buttonsRange = findTopLevelArray(text, 'buttons');
+  if (buttonsRange === null) return text;
+  const buttonRanges = arrayElementRanges(text, buttonsRange.start, buttonsRange.end);
+  let next = text;
+  let changed = false;
+  // 从后往前替换：前面的偏移不因前面的替换而失效。
+  for (let index = buttonRanges.length - 1; index >= 0; index -= 1) {
+    const range = buttonRanges[index] as ArrayElementRange;
+    const element = parseElementObject(next.slice(range.start, range.end));
+    if (element === undefined || element['entry'] !== from) continue;
+    const rendered = JSON.stringify({ ...element, entry: to });
+    next = next.slice(0, range.start) + rendered + next.slice(range.end);
+    changed = true;
+  }
+  if (!changed) return text;
+  // 改完必须仍是同一份合法清单（元素数不变），否则整个退回。
+  return countManifestTasks(next) === countManifestTasks(text) ? next : text;
 }
 

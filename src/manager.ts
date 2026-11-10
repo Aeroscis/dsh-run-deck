@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path';
 import { probeSubprocess, renderCommandLine, resolveRunRoute, signalRunTerminal, killRunTerminal, spawnRunTerminal, tapRunTerminal, transition, type TerminalTap } from './exec.js';
 import { initialHookState, observeLine, type HookOutcome, type HookState } from './hooks.js';
 import { detectTasks as detectProjectTasks } from './detect.js';
-import { insertTaskIntoManifestText, removeTaskFromManifestText } from './manifest-edit.js';
+import { insertTaskIntoManifestText, removeTaskFromManifestText, replaceTaskInManifestText, retargetButtonsInManifestText } from './manifest-edit.js';
 import { buildTaskEntry } from './newtask.js';
 import {
   LEGACY_MANIFEST_RELATIVE_PATH,
@@ -1293,6 +1293,105 @@ export class RunDeckManager {
     }
     const detection = await detectProjectTasks(project.root, project.entries);
     return { ok: true, ...detection };
+  }
+
+  /**
+   * 界面编辑一条启动项：**原位替换项目的 `.dsh/run-deck/run.json` 里那条 task**。
+   *
+   * 这是 `createTask` / `deleteTask` 的第三位兄弟：三条路编辑的都是**同一个源文件**，
+   * 与手改完全等价（`git diff` 里看得见）。校验与收敛走同一份 `buildTaskEntry`
+   * （编辑视角：自己占着的 id 不算冲突），写入用 `replaceTaskInManifestText`
+   * 的原位文本替换（保留注释与排版）。
+   *
+   * id 可以被改：改了就要做两件收尾——
+   *   1. 清单里 `buttons[].entry` 指旧 id 的声明改指新 id（`retargetButtonsInManifestText`）；
+   *   2. 本机 `layout.json` 里旧 id 的覆盖（钉/序/图标/分组）搬到新 id 名下，
+   *      旧的删掉——否则按钮外观和钉住状态会在改名后丢。
+   */
+  async updateTask(
+    projectRoot: string,
+    entryId: string,
+    input: NewTaskInput,
+  ): Promise<ApiResult<{ entry: string; projectRoot: string }>> {
+    const root = normalizeRoot(projectRoot);
+    const manifestPath = join(root, ...MANIFEST_RELATIVE_PATH);
+    return this.withManifestLock(manifestPath, async () => {
+      let project = this.projects.find((candidate) => samePath(candidate.root, root));
+      if (project === undefined || project.configFile === undefined) {
+        return failure(ERROR_CODES.notFound, '这个项目还没有可编辑的 .dsh/run-deck/run.json');
+      }
+      const target = project.configFile;
+
+      // 锁内重读磁盘：另一个并发编辑 / 手改刚落盘也要看得见（与 createTask 同一纪律）。
+      if (await this.manifestChanged(project)) {
+        const reloaded = await loadProject(root);
+        this.projects = [...this.projects.filter((c) => !samePath(c.root, root)), reloaded.project];
+        project = reloaded.project;
+      }
+
+      // "正在被编辑的旧条目必须存在"先验——不然校验语义（排除自己）会落到空集上，
+      // 把一次编辑错当成一次新建放过去。
+      const editing = project.entries.find((candidate) => candidate.id === entryId);
+      if (editing === undefined) {
+        return failure(ERROR_CODES.notFound, `清单里找不到 id 为 ${entryId} 的任务`);
+      }
+
+      const built = await buildTaskEntry(input, {
+        root: project.root,
+        entries: project.entries,
+        directoryExists,
+        editingEntryId: entryId,
+      });
+      if (!built.ok) return built;
+      const task = built.task;
+      const newId = built.entryId;
+
+      let text: string;
+      try {
+        text = await readFile(target, 'utf8');
+      } catch (error) {
+        return failure(ERROR_CODES.fs, '读不了 .dsh/run-deck/run.json', String(error));
+      }
+      const replaced = replaceTaskInManifestText(text, entryId, task);
+      if (!replaced.ok) return failure(ERROR_CODES.badRequest, replaced.message);
+      const idChanged = newId !== entryId;
+      const next = idChanged
+        ? retargetButtonsInManifestText(replaced.text, entryId, newId)
+        : replaced.text;
+
+      try {
+        await this.writeManifestAtomically(target, next);
+      } catch (error) {
+        return failure(ERROR_CODES.fs, '写不了 .dsh/run-deck/run.json', String(error));
+      }
+
+      // id 改名：本机布局覆盖搬到新键。搬不动不拦编辑本体（顶多外观复位），记条告警。
+      if (idChanged && this.layout.buttons[entryId] !== undefined) {
+        const previous = this.layout.buttons[entryId] as ButtonOverride;
+        const buttons: Record<string, ButtonOverride> = { ...this.layout.buttons };
+        delete buttons[entryId];
+        buttons[newId] = previous;
+        const moved: LocalLayout = { buttons, ...pickDensity(this.layout.density) };
+        try {
+          await writeLayout(this.layoutFile, moved);
+          this.layout = moved;
+          this.layoutMtimeMs = undefined;
+        } catch (error) {
+          this.recordWarning(`条目已改名，但本机布局里的旧覆盖搬不过去：${String(error)}`);
+        }
+      }
+
+      const { project: reloaded } = await loadProject(project.root);
+      this.projects = [
+        ...this.projects.filter((candidate) => !samePath(candidate.root, project.root)),
+        reloaded,
+      ];
+      this.deps.log(
+        'info',
+        `界面编辑条目：${project.root} · ${entryId} → ${newId}（${task.label}）`,
+      );
+      return { ok: true, entry: newId, projectRoot: project.root };
+    });
   }
 
   /**

@@ -25,7 +25,7 @@ const { dispatchToolArgs, createToolEntry, TOOL_NAME } = await import(new URL('.
 const { readLayout, writeLayout, effectiveButtons, coerceLayout } = await import(
   new URL('../lib/store.js', import.meta.url)
 );
-const { splitCommandLine, insertTaskIntoManifestText, removeTaskFromManifestText } = await import(
+const { splitCommandLine, insertTaskIntoManifestText, removeTaskFromManifestText, replaceTaskInManifestText, retargetButtonsInManifestText } = await import(
   new URL('../lib/manifest-edit.js', import.meta.url)
 );
 
@@ -1571,6 +1571,205 @@ await check('/task · /detect · /task/remove 走 HTTP：建 → 检测标"已�
     detectAfter.candidates.find((candidate) => candidate.key === 'package.json:dev')?.exists,
     false,
   );
+});
+
+await check('replaceTaskInManifestText：原位替换、注释与缩进保留、数量不变；找不到/坏清单要拒绝', () => {
+  const text = [
+    '{',
+    '  // 人写的注释',
+    '  "tasks": [',
+    '    { "label": "web", "id": "web", "command": "python" },',
+    '    {',
+    '      // 多字段条目自己一行',
+    '      "label": "api",',
+    '      "id": "api",',
+    '      "command": "node",',
+    '      "args": ["server.js"]',
+    '    }',
+    '  ]',
+    '}',
+    '',
+  ].join('\n');
+  const replaced = replaceTaskInManifestText(text, 'api', {
+    label: 'API dev',
+    id: 'api',
+    command: 'npm',
+    args: ['run', 'dev'],
+  });
+  assert.equal(replaced.ok, true);
+  if (!replaced.ok) return;
+  assert.ok(replaced.text.includes('// 人写的注释'), '外层注释要保留');
+  // 被替换元素**内部**的注释随元素一起消失（原位替换只承诺元素外的东西不动）；
+  // 兄弟条目一个字节都不变；被替换元素自己换成新写法。
+  const parsed = JSON.parse(stripJsonComments(replaced.text));
+  assert.deepEqual(parsed.tasks[0], { label: 'web', id: 'web', command: 'python' }, '别的条目原样');
+  assert.deepEqual(parsed.tasks[1], { label: 'API dev', id: 'api', command: 'npm', args: ['run', 'dev'] });
+  assert.equal(parsed.tasks.length, 2, '替换不改条数');
+
+  // 改 id 也定位得到（按旧 id 找位置，新 id 写进替换后的文本）
+  const renamed = replaceTaskInManifestText(text, 'api', { label: 'api', id: 'api-dev', command: 'node' });
+  assert.equal(renamed.ok, true);
+  if (!renamed.ok) return;
+  assert.deepEqual(
+    JSON.parse(stripJsonComments(renamed.text)).tasks.map((task) => task.id),
+    ['web', 'api-dev'],
+  );
+
+  // 多字段条目（带 args、超一行长度）改写后保持"一字段一行"，缩进沿用被替换元素自己的
+  const rich = replaceTaskInManifestText(text, 'api', {
+    label: 'api',
+    id: 'api-dev',
+    command: 'node',
+    args: ['server.js', '--port', '8000'],
+    options: { cwd: 'bin' },
+  });
+  assert.equal(rich.ok, true);
+  if (!rich.ok) return;
+  assert.ok(rich.text.includes('\n      "args": ['), `字段行要沿用 4 空格缩进：${JSON.stringify(rich.text)}`);
+
+  // 找不到 / 坏清单 / tasks 缺失：一律拒绝
+  assert.equal(replaceTaskInManifestText(text, 'nope', { label: 'x', command: 'node' }).ok, false);
+  assert.equal(replaceTaskInManifestText('{ tasks: ', 'x', { label: 'x', command: 'node' }).ok, false);
+  assert.equal(replaceTaskInManifestText('{}', 'x', { label: 'x', command: 'node' }).ok, false);
+});
+
+await check('retargetButtonsInManifestText：buttons[] 里指向旧 id 的声明改指新 id，其余不动', () => {
+  const text = JSON.stringify({
+    tasks: [{ label: 'a', id: 'a', command: 'node' }],
+    buttons: [{ entry: 'a', icon: 'play' }, { entry: 'b', icon: 'eye' }],
+  });
+  const next = retargetButtonsInManifestText(text, 'a', 'a-dev');
+  const parsed = JSON.parse(stripJsonComments(next));
+  assert.equal(parsed.buttons[0].entry, 'a-dev');
+  assert.equal(parsed.buttons[1].entry, 'b', '不相关的声明不动');
+  // 没有指向 from 的声明时原样返回
+  assert.equal(retargetButtonsInManifestText(text, 'zz', 'yy'), text);
+});
+
+await check('界面编辑启动项：原位替换 run.json、注释保留；自己占着自己的 id 不算冲突', async () => {
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-edittask-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  const manifestPath = join(dir, '.dsh', 'run-deck', 'run.json');
+  writeFileSync(
+    manifestPath,
+    [
+      '{',
+      '  // 人写的注释',
+      '  "version": "2.0.0",',
+      '  "tasks": [',
+      '    { "label": "web", "id": "web", "command": "python" },',
+      '    { "label": "api", "id": "api", "command": "node", "args": ["server.js"] }',
+      '  ],',
+      '  "buttons": [{ "entry": "api", "icon": "hammer" }]',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-edittaskdata-'));
+  const manager = new RunDeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+
+  // 什么都没改也要能保存：编辑视角下自己占着的 id 不算冲突
+  const noop = await manager.updateTask(dir, 'api', { label: 'api', command: 'node server.js' });
+  assert.equal(noop.ok, true, `原样保存失败：${noop.ok ? '' : noop.message}`);
+
+  // 改命令 + 改 id：原位替换、buttons[] 与本地覆盖都搬到新 id
+  await manager.setButtonOverride('api', { pinned: true, icon: 'eye' });
+  assert.ok(manager.listButtons().some((button) => button.entry === 'api' && button.icon === 'eye'));
+  const renamed = await manager.updateTask(dir, 'api', {
+    label: 'API dev',
+    id: 'api-dev',
+    command: 'npm run dev',
+  });
+  assert.equal(renamed.ok, true, `改名保存失败：${renamed.ok ? '' : renamed.message}`);
+  if (!renamed.ok) return;
+  assert.equal(renamed.entry, 'api-dev');
+
+  const text = readFileSync(manifestPath, 'utf8');
+  assert.ok(text.includes('// 人写的注释'), '注释要保留（编辑和手改的是同一个文件）');
+  const parsed = JSON.parse(stripJsonComments(text));
+  assert.equal(parsed.tasks.length, 2);
+  assert.deepEqual(parsed.tasks[1], { label: 'API dev', id: 'api-dev', command: 'npm', args: ['run', 'dev'] });
+  assert.equal(parsed.buttons[0].entry, 'api-dev', '清单里的按钮声明要跟到新 id');
+  const moved = manager.listButtons().find((button) => button.entry === 'api-dev');
+  assert.ok(moved, '本机布局覆盖要搬到新 id');
+  assert.equal(moved?.icon, 'eye', '搬过去的覆盖要带上原来的图标');
+  assert.equal(manager.listButtons().some((button) => button.entry === 'api'), false, '旧 id 不留孤儿覆盖');
+
+  // 项目立刻重读：新 id 可见、旧 id 消失
+  const project = manager.listProjects()[0];
+  assert.ok(project?.entries.some((entry) => entry.id === 'api-dev'));
+  assert.ok(!project?.entries.some((entry) => entry.id === 'api'));
+
+  // 非法输入拒绝且不动文件；onReady 指向自己仍然禁止
+  const badCwd = await manager.updateTask(dir, 'api-dev', { label: 'x', command: 'node', cwd: '不存在的目录' });
+  assert.equal(badCwd.ok, false);
+  const selfReady = await manager.updateTask(dir, 'api-dev', {
+    label: 'API dev',
+    command: 'node',
+    onReady: 'api-dev',
+  });
+  assert.equal(selfReady.ok, false, 'onReady 指向自己必须被拒');
+  const missing = await manager.updateTask(dir, 'nope', { label: 'x', command: 'node' });
+  assert.equal(missing.ok, false, '编辑不存在的条目必须报找不到');
+  assert.equal(
+    JSON.parse(stripJsonComments(readFileSync(manifestPath, 'utf8'))).tasks.length,
+    2,
+    '失败的调用不能改文件',
+  );
+});
+
+await check('/task/update 走 HTTP：改一条 → 检测/删除照旧；缺参与字段报错', async () => {
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-edithttp-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(
+    join(dir, '.dsh', 'run-deck', 'run.json'),
+    JSON.stringify({ version: '2.0.0', tasks: [{ label: 'web', id: 'web', command: 'python' }] }),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-edithttpdata-'));
+  const manager = new RunDeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: () => {},
+  });
+  await manager.initialize();
+  const routes = createRoutes({ manager, ready: Promise.resolve(), trustedHosts: () => [], log: () => {} });
+  const updatePath = '/dsh-run-deck/api/task/update';
+
+  // 缺参：entryId 和 projectRoot 都要点名
+  const noRoot = await callRoute(routes, updatePath, '', { method: 'POST', body: { entryId: 'web' } });
+  assert.equal(noRoot.ok, false);
+  const noId = await callRoute(routes, updatePath, '', { method: 'POST', body: { projectRoot: dir } });
+  assert.equal(noId.ok, false);
+
+  // 字段级校验沿用 /task 那一套
+  const badGroup = await callRoute(routes, updatePath, '', {
+    method: 'POST',
+    body: { projectRoot: dir, entryId: 'web', label: 'x', command: 'node', group: 'runtime' },
+  });
+  assert.equal(badGroup.ok, false);
+  assert.match(badGroup.message, /group/);
+
+  const ok = await callRoute(routes, updatePath, '', {
+    method: 'POST',
+    body: { projectRoot: dir, entryId: 'web', label: 'Web', command: 'node dev.js' },
+  });
+  assert.equal(ok.ok, true, `HTTP 编辑失败：${ok.message ?? ''}`);
+  const parsed = JSON.parse(stripJsonComments(readFileSync(join(dir, '.dsh', 'run-deck', 'run.json'), 'utf8')));
+  assert.deepEqual(parsed.tasks[0], { label: 'Web', id: 'web', command: 'node', args: ['dev.js'] });
 });
 
 await check('同清单两个并发 createTask 不丢改动：两条都落盘、清单可解析、id 各自唯一', async () => {

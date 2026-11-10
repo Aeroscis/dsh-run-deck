@@ -1,5 +1,9 @@
 /**
- * dsh-run-deck — 「+」面板提交的一条新启动项：**校验 + 收敛成 TaskEntry**。
+ * dsh-run-deck — 「+」面板提交的一条启动项：**校验 + 收敛成 TaskEntry**。
+ *
+ * 新建与**编辑**共用这一份：编辑就是"替换其中一条"，只是校验视角稍有不同
+ * （`NewTaskContext.editingEntryId`——自己占着自己的 id 不算冲突、onReady
+ * 排除自己）。两件事写两份校验必然漂移，这里是最初那道桥，就不另起炉灶。
  *
  * 单独一个文件，因为它是"界面上那堆输入框"和"清单里那一条 JSON"之间唯一的桥：
  *   - 界面上填的是**人话**（一行命令、一个目录、几行 KEY=value、一条正则）；
@@ -43,6 +47,16 @@ export interface NewTaskContext {
   entries: ResolvedEntry[];
   /** 一个绝对路径是不是已存在的目录（host 注入，测试里可以塞假的）。 */
   directoryExists(path: string): Promise<boolean>;
+  /**
+   * 编辑模式：正在改的那条 entry id。
+   *
+   * 给了它，校验视角就从"往全集中加一条"变成"替换其中一条"：
+   *   - id 撞车判定把自己**排除**在外（自己占着自己的 id 不算冲突）；
+   *   - `onReady` 指向自己也仍然禁止，但指向"除自己以外的任何条目"都合法——
+   *     包括在**本次提交里同时被改成别的 id** 的那些（`excludeFromEntries`
+   *     把旧 id 从集合里摘掉，新 id 由调用方放进 entries）。
+   */
+  editingEntryId?: string;
 }
 
 export interface BuiltTask {
@@ -91,7 +105,13 @@ export async function buildTaskEntry(
   if (command === undefined) return bad('缺命令');
 
   // ── id：显式给了就用（要形如 slug 且不撞），否则由 label 派生 ──
-  const taken = new Set(context.entries.map((entry) => entry.id));
+  // 编辑模式：被改的那条自己占着的 id 先从"已占用"里摘掉——否则一打开编辑器、
+  // 什么都没改就提交，会被自己的旧 id 拦下来。
+  const taken = new Set(
+    context.entries
+      .filter((entry) => entry.id !== context.editingEntryId)
+      .map((entry) => entry.id),
+  );
   const explicitId = typeof input.id === 'string' ? input.id.trim() : '';
   let id: string;
   if (explicitId.length > 0) {
@@ -201,11 +221,15 @@ export async function buildTaskEntry(
   }
 
   // ── onReady：只接受本项目已有的 entry id ──
+  // 编辑模式下 onReady 可以指向"除自己以外"的任何已有条目（接续自己等于死循环）。
   let onReady: string | undefined;
   const onReadyInput = typeof input.onReady === 'string' ? input.onReady.trim() : '';
   if (onReadyInput.length > 0) {
     if (onReadyInput === id) return bad('onReady 不能指向自己', '换一条，或者先不接续。');
-    if (!context.entries.some((entry) => entry.id === onReadyInput)) {
+    if (
+      onReadyInput === context.editingEntryId ||
+      !context.entries.some((entry) => entry.id === onReadyInput)
+    ) {
       return bad(
         `onReady 指向不存在的条目：${onReadyInput}`,
         '只接受本项目里已有的 entry id（不是命令）。',

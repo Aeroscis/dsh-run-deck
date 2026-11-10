@@ -309,12 +309,17 @@ host half spawn 的进程**绕过 agent 的 pwsh 沙箱**，所以：
 
 - **`☰`** 打开**管理面板**：列出全部条目，每行左侧 `⋮⋮` 是拖拽手柄（**按住上下拖动**
   调按钮条顺序；指针事件实现：那一行跟手抬起、其余各行带过渡让位、松手滑进槽位），
-  右侧是两件事：
+  右侧是三件事：
   - **「钉到按钮条 / 从按钮条收起」**：只改这条按钮在不在条上（写本地 `layout.json`），
     条目本身保留；
+  - **「编辑」**：打开**编辑面板**，预填这条任务在清单里**原样**的字段（变量不展开、
+    cwd 保持相对），改完**原位替换** run.json 里那条 task（注释与排版保留，与手改
+    完全等价）。校验与新建走同一份（`buildTaskEntry`），只是"自己占着自己的 id"
+    不算冲突、`onReady` 排除自己。**id 可以改**：清单里 `buttons[].entry` 的声明和
+    本机 `layout.json` 的外观覆盖会一起搬到新 id。
   - **「删除」**：真的把这条任务从项目的 `.dsh/run-deck/run.json` 的 `tasks[]` 里移除（连带清掉
     `buttons[]` 里指向它的声明），需要再点一次「确认删除」。
-  **排序和删除都在这里**。顺序写进机器本地的 `layout.json`，覆盖 run.json 的 `order`，
+  **排序、编辑、删除都在这里**。顺序写进机器本地的 `layout.json`，覆盖 run.json 的 `order`，
   你拖完只影响你自己。
 - **`+`** 打开**新建面板**。它的分工是「先把能填的填上，别让人去手改文件」：
   - **顶部先给候选**：读当前项目的 `package.json` 的 `scripts`，列成胶囊（`pnpm: dev` /
@@ -693,6 +698,7 @@ Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-run-deck' -List | Select-
 | POST | `/observe` | `{runId, line}` 推进钩子状态（第 3 步接线用） |
 | POST | `/entry` | `{projectRoot, entryId}` 一条 entry 的声明 + 算好的命令行 |
 | POST | `/task` | `{projectRoot, label, command, cwd?, env?, isBackground?, group?, id?, readyPattern?, openUrl?, urlPattern?, uriFormat?, reveal?, onReady?}` 新建一条并写进项目 `run.json`（host 逐项校验，失败不落盘） |
+| POST | `/task/update` | `{projectRoot, entryId, …同 /task 字段}` 原位替换项目 `run.json` 里那条 task（校验与新建同一份；id 可改，`buttons[]` 声明与本地覆盖跟着搬到新 id） |
 | POST | `/detect` | `{projectRoot}` 读该项目的 `package.json` `scripts`，返回候选（含猜出来的长驻 / 就绪正则 / 分组）；只读、不落盘、不执行 |
 | POST | `/task/remove` | `{projectRoot, entryId}` 从项目 `run.json` 的 `tasks[]` 里真的删掉一条（连带 `buttons[]` 与本地覆盖） |
 | POST | `/button` | `{entry, pinned?, order?, icon?, group?, label?}` 单个按钮的本地覆盖 |

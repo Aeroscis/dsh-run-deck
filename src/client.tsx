@@ -33,6 +33,7 @@ import type {
   RunDeckState,
   RunRecord,
   TaskDetection,
+  TaskEntry,
   TaskGroup,
 } from './types.js';
 
@@ -93,7 +94,7 @@ const ZH: Record<string, string> = {
   createHelp:
     '给当前工作区建一个「启动项」：一个按钮，点它就在项目里跑一条固定命令（dev server、构建、测试这类）。\n\n填名称和一行命令就能建；上面的候选点一下自动填。工作目录、环境变量、就绪正则这些在「更多设置」里。\n\n条目写进项目的 .dsh/run-deck/run.json（和手改同一个文件，可以进 git），创建后自动钉到上面的按钮条。',
   createHelpAgent:
-    '不想自己填：对 agent 说「帮我加一个跑 dev server 的按钮」就行——它会用 run-deck 工具写进同一个 run.json，按钮条上就会出现。要改已有条目，让它直接编辑 .dsh/run-deck/run.json。',
+    '不想自己填：对 agent 说「帮我加一个跑 dev server 的按钮」就行——它会用 run-deck 工具写进同一个 run.json，按钮条上就会出现。要改已有条目，可以到 ☰「管理」面板点「编辑」，也可以让它直接改 .dsh/run-deck/run.json。',
   detectTitle: '从项目里检测',
   detectHint: '点一条就填进下面的表单（填进去之后仍然可以改）。',
   detectLoading: '正在读 package.json…',
@@ -140,6 +141,12 @@ const ZH: Record<string, string> = {
   createdUnpinnedNote: '已写进 .dsh/run-deck/run.json，但没能钉上按钮条。',
   pinRetryNote: '可以在 ☰「管理」面板里手动钉上。',
   manageTitle: '管理启动项',
+  editEntry: '编辑',
+  editSave: '保存',
+  editTitle: '编辑启动项',
+  editHint: '改动写回 .dsh/run-deck/run.json 里这条任务（原位替换，注释与排版保留）。',
+  editSaved: '已写回 .dsh/run-deck/run.json。',
+  editIdFixed: 'id 改了也没关系：按钮声明与本机外观会跟着搬到新 id。',
   deleteEntry: '删除',
   deleteConfirm: '确认删除',
   deleteCancel: '取消',
@@ -214,7 +221,7 @@ const EN: Record<string, string> = {
   createHelp:
     'Adds a launch entry to this workspace: a button that runs one fixed command in the project (a dev server, a build, tests).\n\nA name and a one-line command are enough; detected candidates above fill the form in one click. Working directory, env vars and ready patterns live under "More settings".\n\nThe entry is written into the project’s .dsh/run-deck/run.json (the same file you could edit by hand; it can go into git) and pinned to the bar above.',
   createHelpAgent:
-    'Rather not fill it in? Tell your agent: "add a launch button that runs npm run dev" — it uses the run-deck tool to write the same run.json, and the button appears on the bar. To change existing entries, ask it to edit .dsh/run-deck/run.json directly.',
+    'Rather not fill it in? Tell your agent: "add a launch button that runs npm run dev" — it uses the run-deck tool to write the same run.json, and the button appears on the bar. To change existing entries, use "Edit" in the ☰ manage panel, or ask it to edit .dsh/run-deck/run.json directly.',
   detectTitle: 'Detected in this project',
   detectHint: 'Click one to fill the form below (you can still change every field).',
   detectLoading: 'Reading package.json…',
@@ -261,6 +268,12 @@ const EN: Record<string, string> = {
   createdUnpinnedNote: 'Written into .dsh/run-deck/run.json, but pinning it to the bar failed.',
   pinRetryNote: 'You can pin it manually from the ☰ manage panel.',
   manageTitle: 'Manage launch entries',
+  editEntry: 'Edit',
+  editSave: 'Save',
+  editTitle: 'Edit launch entry',
+  editHint: 'Changes are written back to this task in .dsh/run-deck/run.json (replaced in place; comments and layout preserved).',
+  editSaved: 'Written back to .dsh/run-deck/run.json.',
+  editIdFixed: 'Renaming the id is fine: the button declaration and local look move to the new id.',
   deleteEntry: 'Delete',
   deleteConfirm: 'Confirm delete',
   deleteCancel: 'Cancel',
@@ -1296,6 +1309,19 @@ async function deleteTask(projectRoot: string, entryId: string): Promise<ApiResu
   return call<unknown>('/task/remove', 'POST', { projectRoot, entryId });
 }
 
+/**
+ * 编辑一条启动项：**原位替换项目 run.json 里那条 task**（校验与新建同一份，
+ * host 侧完成；`entryId` 是被替换那条的旧 id，返回的 `entry` 是改完后的 id——
+ * 两者在"没改 id"时相同，改了 id 时按钮声明与本机外观由 host 一起搬过去）。
+ */
+async function updateTask(
+  projectRoot: string,
+  entryId: string,
+  input: NewTaskInput,
+): Promise<ApiResult<{ entry: string }>> {
+  return call<{ entry: string }>('/task/update', 'POST', { projectRoot, entryId, ...input });
+}
+
 /* ================================================================== *
  * 按钮条
  * ================================================================== */
@@ -1317,6 +1343,8 @@ interface BarProps {
   onOpenAdd(): void;
   /** 打开「☰」面板：管理成员（钉上/移除）与顺序（拖动排序）。 */
   onOpenManage(): void;
+  /** 打开「编辑」面板（从管理面板每行的「编辑」进来；`entryId` 是被编辑那条的旧 id）。 */
+  onOpenEdit(entryId: string): void;
   onOpenSettings(): void;
   onOpenError(): void;
   /** 输出悬浮卡当前"钉"在哪条 entry（卡片头部的图钉按钮控制；null = 没钉，悬停才出现）。 */
@@ -1324,7 +1352,9 @@ interface BarProps {
   /** 钉住/拔钉某条条目的输出卡（悬浮卡头部的图钉按钮，条上没有第二颗钉钮）。 */
   onTogglePin(entry: string): void;
   onOpenOverflow(): void;
-  openPanel: 'none' | 'add' | 'manage' | 'settings' | 'error' | 'overflow';
+  openPanel: 'none' | 'add' | 'manage' | 'edit' | 'settings' | 'error' | 'overflow';
+  /** 「编辑」面板正在改哪条（旧 entry id）；只在 `openPanel === 'edit'` 时有意义。 */
+  editingEntry: string | null;
   onClosePanel(): void;
   entries: ResolvedEntry[];
   projectRoot: string | null;
@@ -1346,6 +1376,14 @@ interface BarProps {
   ): Promise<ApiResult<{ entry: string; pinError?: string }>>;
   /** 删除启动项（真的从项目 run.json 的 tasks[] 里移除）。 */
   onDeleteTask(entryId: string): Promise<ApiResult<unknown>>;
+  /**
+   * 编辑启动项（原位替换项目 run.json 里那条 task）。`entryId` 是旧 id，
+   * 返回的 `entry` 是改完后的 id（改了 id 时两者不同，host 负责搬按钮声明与外观）。
+   */
+  onUpdateTask(
+    entryId: string,
+    input: NewTaskInput,
+  ): Promise<ApiResult<{ entry: string }>>;
   /** 最近一次跑/停的失败原因；非 null 时条上出现一个可点的告警标记。 */
   lastError: string | null;
 }
@@ -1498,8 +1536,20 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
         </div>
       ) : null}
       {openPanel === 'manage' ? (
-        <div className="__ru_pop">
+        <div className="__ru_pop __ru_popTall">
           <ManagePanel {...props} />
+        </div>
+      ) : null}
+      {openPanel === 'edit' && props.editingEntry !== null ? (
+        <div className="__ru_pop __ru_popTall">
+          <EditPanel
+            entryId={props.editingEntry}
+            entries={props.entries}
+            runtime={runtime}
+            projectRoot={props.projectRoot}
+            onUpdateTask={props.onUpdateTask}
+            onClosePanel={onClosePanel}
+          />
         </div>
       ) : null}
       {openPanel === 'settings' ? (
@@ -1804,8 +1854,355 @@ interface RowDrag {
  * ＋ 添加面板（新建启动项）
  * ================================================================== */
 
+/* ─────────────────────── 共享表单（新建与编辑共用） ─────────────────────── */
+
 /**
- * 把「KEY=value，每行一条」解析成对象；空行与 `#` 开头的行跳过。
+ * 表单的**全部字段状态**——新建与编辑共用的那一块。
+ *
+ * 为什么收成一个对象而不是十几颗散的 `useState`：状态转换（清空 / 预填 / 收敛成
+ * `NewTaskInput`）要能写成**纯函数**在两边复用，散装 setter 没法一次搬动。
+ */
+interface TaskFormState {
+  label: string;
+  command: string;
+  cwd: string;
+  envText: string;
+  background: boolean;
+  group: TaskGroup;
+  entryId: string;
+  readyPattern: string;
+  openUrl: boolean;
+  urlPattern: string;
+  uriFormat: string;
+  reveal: boolean;
+  onReady: string;
+}
+
+/** 一张空表单（新建的起点；建完一条之后也回到这里）。 */
+function blankTaskForm(): TaskFormState {
+  return {
+    label: '',
+    command: '',
+    cwd: '',
+    envText: '',
+    background: false,
+    group: 'none',
+    entryId: '',
+    readyPattern: '',
+    openUrl: false,
+    urlPattern: '',
+    uriFormat: '',
+    reveal: false,
+    onReady: '',
+  };
+}
+
+/**
+ * 从清单里**原样**的那条预填（编辑的起点；「从已有条目复制」走的是它的变体）。
+ *
+ * 用 `raw` 而不是解析结果：变量不展开、cwd 保持相对——编辑一个字段落盘时，
+ * 其余字段还是清单里原来的写法，不会悄悄被绝对路径化。
+ */
+function taskFormFromRaw(raw: TaskEntry): TaskFormState {
+  return {
+    label: raw.label,
+    command: [raw.command, ...(raw.args ?? [])].map(quoteArgument).join(' '),
+    cwd: raw.options?.cwd ?? '',
+    envText: Object.entries(raw.options?.env ?? {})
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n'),
+    background: raw.isBackground === true,
+    group: raw.group ?? 'none',
+    entryId: raw.id ?? '',
+    readyPattern: raw.problemMatcher?.background?.endsPattern ?? '',
+    openUrl: raw.serverReadyAction !== undefined,
+    urlPattern: raw.serverReadyAction?.pattern ?? '',
+    uriFormat: raw.serverReadyAction?.uriFormat ?? '',
+    reveal: raw.presentation?.reveal === 'always',
+    onReady: raw.onReady ?? '',
+  };
+}
+
+/** 把表单收敛成提交给 host 的 `NewTaskInput`（空字段不发送；env 的坏行交给调用方先拦）。 */
+function taskInputFromForm(form: TaskFormState): NewTaskInput {
+  const env = parseEnvLines(form.envText).env;
+  return {
+    label: form.label.trim(),
+    command: form.command.trim(),
+    ...(form.cwd.trim().length > 0 ? { cwd: form.cwd.trim() } : {}),
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+    ...(form.background ? { isBackground: true } : {}),
+    ...(form.group !== 'none' ? { group: form.group } : {}),
+    ...(form.entryId.trim().length > 0 ? { id: form.entryId.trim() } : {}),
+    ...(form.readyPattern.trim().length > 0 ? { readyPattern: form.readyPattern.trim() } : {}),
+    ...(form.openUrl
+      ? {
+          openUrl: true,
+          ...(form.urlPattern.trim().length > 0 ? { urlPattern: form.urlPattern.trim() } : {}),
+          ...(form.uriFormat.trim().length > 0 ? { uriFormat: form.uriFormat.trim() } : {}),
+        }
+      : {}),
+    ...(form.reveal ? { reveal: 'always' as const } : {}),
+    ...(form.onReady.length > 0 ? { onReady: form.onReady } : {}),
+  };
+}
+
+/**
+ * 表单字段的**渲染**：基础两栏 + 「更多设置」里那 9 个字段。
+ *
+ * 一个纯函数而不是组件——它不拥有状态（`form`/`onChange` 都是传入的），
+ * 所以假 React / 真 React 下行为一致，两个面板也各自保留自己的 hooks
+ * （`more` 是否默认展开、"提交后清不清空"这类差异留在调用方）。
+ *
+ * `onReady` 的候选由 `onReadyEntries` 决定：编辑时排除自己（接续自己 = 死循环），
+ * 新建时是全部条目。`idHint` 只在编辑面板出现（说明改 id 会发生什么）。
+ */
+function TaskFormFields(props: {
+  form: TaskFormState;
+  onChange(next: TaskFormState): void;
+  more: boolean;
+  onToggleMore(): void;
+  onReadyEntries: ResolvedEntry[];
+  /** 名称/命令输入框的占位文案：新建给示例，编辑里已有值就不需要。 */
+  withPlaceholders: boolean;
+  /** 「更多设置」里 id 字段下方的说明（编辑面板给"改 id 会怎样"）；不给就不渲染。 */
+  idHint?: string;
+  /** 「更多设置」末尾的追加字段（新建面板的图标/分组——只写本机布局，编辑没有）。 */
+  advancedExtra?: React.ReactNode;
+  /** 右下角提交钮旁边的「关闭」；不给就不渲染（两个面板都给）。 */
+  closeLabel?: string;
+  onClosePanel?(): void;
+  runtime: Runtime;
+  submitDisabled: boolean;
+  submitLabel: string;
+  onSubmit(): void;
+}): React.ReactElement {
+  const {
+    form, onChange, more, onToggleMore, onReadyEntries,
+    withPlaceholders, idHint, advancedExtra, closeLabel, onClosePanel,
+    runtime, submitDisabled, submitLabel, onSubmit,
+  } = props;
+  const set = (patch: Partial<TaskFormState>): void => onChange({ ...form, ...patch });
+  const t = (key: string): string => runtime.t(key);
+  return (
+    <>
+      <div className="__ru_form">
+        <div className="__ru_field">
+          <span className="__ru_fieldLabel">{t('fieldName')}</span>
+          <div className="__ru_fieldBody">
+            <input
+              className="__ru_input __ru_inputGrow"
+              value={form.label}
+              onChange={(event) => set({ label: event.target.value })}
+              placeholder={withPlaceholders ? t('newTaskLabelPlaceholder') : undefined}
+              aria-label={t('fieldName')}
+              spellCheck={false}
+            />
+          </div>
+        </div>
+        <div className="__ru_field">
+          <span className="__ru_fieldLabel">{t('fieldCommand')}</span>
+          <div className="__ru_fieldBody">
+            <input
+              className="__ru_input __ru_inputGrow"
+              value={form.command}
+              onChange={(event) => set({ command: event.target.value })}
+              placeholder={withPlaceholders ? t('newTaskCommandPlaceholder') : undefined}
+              aria-label={t('fieldCommand')}
+              spellCheck={false}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  onSubmit();
+                }
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className="__ru_moreToggle"
+        aria-expanded={more}
+        onClick={onToggleMore}
+      >
+        {more ? `▾ ${t('moreHide')}` : `▸ ${t('moreShow')}`}
+      </button>
+
+      {more ? (
+        <div className="__ru_advanced" style={{ marginTop: 8 }}>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('fieldCwd')}</span>
+            <div className="__ru_fieldBody">
+              <input
+                className="__ru_input __ru_inputGrow"
+                value={form.cwd}
+                onChange={(event) => set({ cwd: event.target.value })}
+                placeholder={t('fieldCwdPlaceholder')}
+                aria-label={t('fieldCwd')}
+                spellCheck={false}
+              />
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('fieldEnv')}</span>
+            <div className="__ru_fieldBody">
+              <textarea
+                className="__ru_textarea"
+                value={form.envText}
+                onChange={(event) => set({ envText: event.target.value })}
+                placeholder={t('fieldEnvPlaceholder')}
+                aria-label={t('fieldEnv')}
+                spellCheck={false}
+                rows={3}
+              />
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('fieldId')}</span>
+            <div className="__ru_fieldBody">
+              <input
+                className="__ru_input __ru_inputGrow"
+                value={form.entryId}
+                onChange={(event) => set({ entryId: event.target.value })}
+                placeholder={t('fieldIdPlaceholder')}
+                aria-label={t('fieldId')}
+                spellCheck={false}
+              />
+              {idHint !== undefined ? (
+                <p className="__ru_fieldHint" style={{ flexBasis: '100%' }}>{idHint}</p>
+              ) : null}
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('fieldGroup')}</span>
+            <div className="__ru_fieldBody">
+              <select
+                className="__ru_select"
+                value={form.group}
+                onChange={(event) => set({ group: event.target.value as TaskGroup })}
+                aria-label={t('fieldGroup')}
+              >
+                <option value="none">{t('groupNone')}</option>
+                <option value="build">{t('groupBuild')}</option>
+                <option value="test">{t('groupTest')}</option>
+              </select>
+              <label className="__ru_check">
+                <input
+                  type="checkbox"
+                  checked={form.background}
+                  onChange={(event) => set({ background: event.target.checked })}
+                />
+                <span>{t('fieldBackground')}</span>
+              </label>
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('fieldReady')}</span>
+            <div className="__ru_fieldBody">
+              <input
+                className="__ru_input __ru_inputGrow"
+                value={form.readyPattern}
+                onChange={(event) => set({ readyPattern: event.target.value })}
+                placeholder={t('fieldReadyPlaceholder')}
+                aria-label={t('fieldReady')}
+                spellCheck={false}
+              />
+              <p className="__ru_fieldHint" style={{ flexBasis: '100%' }}>
+                {t('fieldReadyHint')}
+              </p>
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('fieldOpenUrl')}</span>
+            <div className="__ru_fieldBody">
+              <label className="__ru_check">
+                <input
+                  type="checkbox"
+                  checked={form.openUrl}
+                  onChange={(event) => set({ openUrl: event.target.checked })}
+                />
+                <span>{t('fieldOpenUrl')}</span>
+              </label>
+              {form.openUrl ? (
+                <>
+                  <input
+                    className="__ru_input __ru_inputGrow"
+                    value={form.urlPattern}
+                    onChange={(event) => set({ urlPattern: event.target.value })}
+                    placeholder={t('fieldUrlPatternPlaceholder')}
+                    aria-label={t('fieldUrlPattern')}
+                    spellCheck={false}
+                  />
+                  <input
+                    className="__ru_input"
+                    value={form.uriFormat}
+                    onChange={(event) => set({ uriFormat: event.target.value })}
+                    placeholder={t('fieldUriFormatPlaceholder')}
+                    aria-label={t('fieldUriFormat')}
+                    spellCheck={false}
+                  />
+                </>
+              ) : null}
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('output')}</span>
+            <div className="__ru_fieldBody">
+              <label className="__ru_check">
+                <input
+                  type="checkbox"
+                  checked={form.reveal}
+                  onChange={(event) => set({ reveal: event.target.checked })}
+                />
+                <span>{t('fieldReveal')}</span>
+              </label>
+            </div>
+          </div>
+          <div className="__ru_field">
+            <span className="__ru_fieldLabel">{t('fieldOnReady')}</span>
+            <div className="__ru_fieldBody">
+              <select
+                className="__ru_select"
+                value={form.onReady}
+                onChange={(event) => set({ onReady: event.target.value })}
+                aria-label={t('fieldOnReady')}
+              >
+                <option value="">{t('fieldOnReadyNone')}</option>
+                {onReadyEntries.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {advancedExtra}
+        </div>
+      ) : null}
+
+      <div className="__ru_sep" />
+      <div className="__ru_rowActions" style={{ justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="__ru_btn __ru_fixed"
+          disabled={submitDisabled}
+          onClick={onSubmit}
+        >
+          {submitLabel}
+        </button>
+        {closeLabel !== undefined && onClosePanel !== undefined ? (
+          <button type="button" className="__ru_btn" onClick={onClosePanel}>
+            {closeLabel}
+          </button>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+/** 把「KEY=value，每行一条」解析成对象；空行与 `#` 开头的行跳过。
  *
  * 坏行返回**原文**而不是行号：界面上直接把它贴在错误里，"错在哪一行"比"第 3 行"
  * 更不容易数错（环境变量文本框会折行）。host 也会再校验一次，这里只是先拦住。
@@ -1850,24 +2247,12 @@ function quoteArgument(value: string): string {
 function AddPanel(props: BarProps): React.ReactElement {
   const { entries, runtime, projectRoot, onClosePanel, onCreateTask } = props;
 
-  // 基础两栏
-  const [label, setLabel] = React.useState('');
-  const [command, setCommand] = React.useState('');
+  // 表单状态收成一个对象（共享表单，见 TaskFormFields）：预填/清空/收敛都是纯函数。
+  const [form, setForm] = React.useState<TaskFormState>(blankTaskForm);
   // 「更多设置」
   const [more, setMore] = React.useState(false);
   /** 「?」介绍框：默认收起。里面是"这个面板是什么、怎么用"的完整版说明。 */
   const [helpOpen, setHelpOpen] = React.useState(false);
-  const [cwd, setCwd] = React.useState('');
-  const [envText, setEnvText] = React.useState('');
-  const [background, setBackground] = React.useState(false);
-  const [group, setGroup] = React.useState<TaskGroup>('none');
-  const [entryId, setEntryId] = React.useState('');
-  const [readyPattern, setReadyPattern] = React.useState('');
-  const [openUrl, setOpenUrl] = React.useState(false);
-  const [urlPattern, setUrlPattern] = React.useState('');
-  const [uriFormat, setUriFormat] = React.useState('');
-  const [reveal, setReveal] = React.useState(false);
-  const [onReady, setOnReady] = React.useState('');
   // 只写本机 layout.json 的外观
   const [icon, setIcon] = React.useState('');
   const [buttonGroup, setButtonGroup] = React.useState('');
@@ -1914,15 +2299,18 @@ function AddPanel(props: BarProps): React.ReactElement {
   /** 点一条候选 → 填进表单（预填的字段立刻展开可见）。 */
   const applyPreset = (candidate: DetectedTask): void => {
     const preset = candidate.preset;
-    setLabel(candidate.label);
-    setCommand(candidate.command);
-    setCwd(preset.cwd ?? '');
-    setBackground(preset.isBackground === true);
-    setGroup(preset.group ?? 'none');
-    setReadyPattern(preset.readyPattern ?? '');
-    setOpenUrl(preset.openUrl === true);
-    setUrlPattern(preset.urlPattern ?? '');
-    setUriFormat(preset.uriFormat ?? '');
+    setForm({
+      ...blankTaskForm(),
+      label: candidate.label,
+      command: candidate.command,
+      cwd: preset.cwd ?? '',
+      background: preset.isBackground === true,
+      group: preset.group ?? 'none',
+      readyPattern: preset.readyPattern ?? '',
+      openUrl: preset.openUrl === true,
+      urlPattern: preset.urlPattern ?? '',
+      uriFormat: preset.uriFormat ?? '',
+    });
     setMore(true);
     setCreated(null);
     setError(null);
@@ -1932,23 +2320,7 @@ function AddPanel(props: BarProps): React.ReactElement {
   const copyFrom = (id: string): void => {
     const raw = entries.find((candidate) => candidate.id === id)?.raw;
     if (raw === undefined) return;
-    setLabel(`${raw.label}（副本）`);
-    setCommand([raw.command, ...(raw.args ?? [])].map(quoteArgument).join(' '));
-    setCwd(raw.options?.cwd ?? '');
-    setEnvText(
-      Object.entries(raw.options?.env ?? {})
-        .map(([key, value]) => `${key}=${value}`)
-        .join('\n'),
-    );
-    setBackground(raw.isBackground === true);
-    setGroup(raw.group ?? 'none');
-    setEntryId('');
-    setReadyPattern(raw.problemMatcher?.background?.endsPattern ?? '');
-    setOpenUrl(raw.serverReadyAction !== undefined);
-    setUrlPattern(raw.serverReadyAction?.pattern ?? '');
-    setUriFormat(raw.serverReadyAction?.uriFormat ?? '');
-    setReveal(raw.presentation?.reveal === 'always');
-    setOnReady(raw.onReady ?? '');
+    setForm({ ...taskFormFromRaw(raw), label: `${raw.label}（副本）`, entryId: '' });
     setMore(true);
     setCreated(null);
     setError(null);
@@ -1956,43 +2328,22 @@ function AddPanel(props: BarProps): React.ReactElement {
 
   /** 创建并钉上条：host 负责校验 + 写进 run.json，失败原因原样显示在面板里。 */
   const submit = async (): Promise<void> => {
-    const name = label.trim();
-    const line = command.trim();
+    const name = form.label.trim();
+    const line = form.command.trim();
     if (creating || name.length === 0 || line.length === 0) return;
 
-    const parsedEnv = parseEnvLines(envText);
+    const parsedEnv = parseEnvLines(form.envText);
     if (parsedEnv.error !== undefined) {
       setError(`${runtime.t('fieldEnvInvalid')}${parsedEnv.error}`);
       setMore(true);
       return;
     }
 
-    const env = parsedEnv.env;
-    const input: NewTaskInput = {
-      label: name,
-      command: line,
-      ...(cwd.trim().length > 0 ? { cwd: cwd.trim() } : {}),
-      ...(Object.keys(env).length > 0 ? { env } : {}),
-      ...(background ? { isBackground: true } : {}),
-      ...(group !== 'none' ? { group } : {}),
-      ...(entryId.trim().length > 0 ? { id: entryId.trim() } : {}),
-      ...(readyPattern.trim().length > 0 ? { readyPattern: readyPattern.trim() } : {}),
-      ...(openUrl
-        ? {
-            openUrl: true,
-            ...(urlPattern.trim().length > 0 ? { urlPattern: urlPattern.trim() } : {}),
-            ...(uriFormat.trim().length > 0 ? { uriFormat: uriFormat.trim() } : {}),
-          }
-        : {}),
-      ...(reveal ? { reveal: 'always' as const } : {}),
-      ...(onReady.length > 0 ? { onReady } : {}),
-    };
-
     setCreating(true);
     setError(null);
     setPinError(null);
     try {
-      const result = await onCreateTask(input, {
+      const result = await onCreateTask(taskInputFromForm(form), {
         ...(icon.trim().length > 0 ? { icon: icon.trim() } : {}),
         ...(buttonGroup.trim().length > 0 ? { group: buttonGroup.trim() } : {}),
       });
@@ -2001,19 +2352,7 @@ function AddPanel(props: BarProps): React.ReactElement {
         return;
       }
       // 清空表单，但保留「更多设置」的展开状态：连着建第二条时不用再展开一次。
-      setLabel('');
-      setCommand('');
-      setCwd('');
-      setEnvText('');
-      setBackground(false);
-      setGroup('none');
-      setEntryId('');
-      setReadyPattern('');
-      setOpenUrl(false);
-      setUrlPattern('');
-      setUriFormat('');
-      setReveal(false);
-      setOnReady('');
+      setForm(blankTaskForm());
       setIcon('');
       setButtonGroup('');
       setCreated(result.entry);
@@ -2141,197 +2480,17 @@ function AddPanel(props: BarProps): React.ReactElement {
         </div>
       ) : null}
 
-      <div className="__ru_form">
-        <div className="__ru_field">
-          <span className="__ru_fieldLabel">{runtime.t('fieldName')}</span>
-          <div className="__ru_fieldBody">
-            <input
-              className="__ru_input __ru_inputGrow"
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-              placeholder={runtime.t('newTaskLabelPlaceholder')}
-              aria-label={runtime.t('fieldName')}
-              spellCheck={false}
-              disabled={projectRoot === null}
-            />
-          </div>
-        </div>
-        <div className="__ru_field">
-          <span className="__ru_fieldLabel">{runtime.t('fieldCommand')}</span>
-          <div className="__ru_fieldBody">
-            <input
-              className="__ru_input __ru_inputGrow"
-              value={command}
-              onChange={(event) => setCommand(event.target.value)}
-              placeholder={runtime.t('newTaskCommandPlaceholder')}
-              aria-label={runtime.t('fieldCommand')}
-              spellCheck={false}
-              disabled={projectRoot === null}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void submit();
-                }
-              }}
-            />
-          </div>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        className="__ru_moreToggle"
-        aria-expanded={more}
-        onClick={() => setMore(!more)}
-      >
-        {more ? `▾ ${runtime.t('moreHide')}` : `▸ ${runtime.t('moreShow')}`}
-      </button>
-
-      {more ? (
-        <div className="__ru_advanced" style={{ marginTop: 8 }}>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('fieldCwd')}</span>
-            <div className="__ru_fieldBody">
-              <input
-                className="__ru_input __ru_inputGrow"
-                value={cwd}
-                onChange={(event) => setCwd(event.target.value)}
-                placeholder={runtime.t('fieldCwdPlaceholder')}
-                aria-label={runtime.t('fieldCwd')}
-                spellCheck={false}
-              />
-            </div>
-          </div>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('fieldEnv')}</span>
-            <div className="__ru_fieldBody">
-              <textarea
-                className="__ru_textarea"
-                value={envText}
-                onChange={(event) => setEnvText(event.target.value)}
-                placeholder={runtime.t('fieldEnvPlaceholder')}
-                aria-label={runtime.t('fieldEnv')}
-                spellCheck={false}
-                rows={3}
-              />
-            </div>
-          </div>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('fieldId')}</span>
-            <div className="__ru_fieldBody">
-              <input
-                className="__ru_input __ru_inputGrow"
-                value={entryId}
-                onChange={(event) => setEntryId(event.target.value)}
-                placeholder={runtime.t('fieldIdPlaceholder')}
-                aria-label={runtime.t('fieldId')}
-                spellCheck={false}
-              />
-            </div>
-          </div>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('fieldGroup')}</span>
-            <div className="__ru_fieldBody">
-              <select
-                className="__ru_select"
-                value={group}
-                onChange={(event) => setGroup(event.target.value as TaskGroup)}
-                aria-label={runtime.t('fieldGroup')}
-              >
-                <option value="none">{runtime.t('groupNone')}</option>
-                <option value="build">{runtime.t('groupBuild')}</option>
-                <option value="test">{runtime.t('groupTest')}</option>
-              </select>
-              <label className="__ru_check">
-                <input
-                  type="checkbox"
-                  checked={background}
-                  onChange={(event) => setBackground(event.target.checked)}
-                />
-                <span>{runtime.t('fieldBackground')}</span>
-              </label>
-            </div>
-          </div>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('fieldReady')}</span>
-            <div className="__ru_fieldBody">
-              <input
-                className="__ru_input __ru_inputGrow"
-                value={readyPattern}
-                onChange={(event) => setReadyPattern(event.target.value)}
-                placeholder={runtime.t('fieldReadyPlaceholder')}
-                aria-label={runtime.t('fieldReady')}
-                spellCheck={false}
-              />
-              <p className="__ru_fieldHint" style={{ flexBasis: '100%' }}>
-                {runtime.t('fieldReadyHint')}
-              </p>
-            </div>
-          </div>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('fieldOpenUrl')}</span>
-            <div className="__ru_fieldBody">
-              <label className="__ru_check">
-                <input
-                  type="checkbox"
-                  checked={openUrl}
-                  onChange={(event) => setOpenUrl(event.target.checked)}
-                />
-                <span>{runtime.t('fieldOpenUrl')}</span>
-              </label>
-              {openUrl ? (
-                <>
-                  <input
-                    className="__ru_input __ru_inputGrow"
-                    value={urlPattern}
-                    onChange={(event) => setUrlPattern(event.target.value)}
-                    placeholder={runtime.t('fieldUrlPatternPlaceholder')}
-                    aria-label={runtime.t('fieldUrlPattern')}
-                    spellCheck={false}
-                  />
-                  <input
-                    className="__ru_input"
-                    value={uriFormat}
-                    onChange={(event) => setUriFormat(event.target.value)}
-                    placeholder={runtime.t('fieldUriFormatPlaceholder')}
-                    aria-label={runtime.t('fieldUriFormat')}
-                    spellCheck={false}
-                  />
-                </>
-              ) : null}
-            </div>
-          </div>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('output')}</span>
-            <div className="__ru_fieldBody">
-              <label className="__ru_check">
-                <input
-                  type="checkbox"
-                  checked={reveal}
-                  onChange={(event) => setReveal(event.target.checked)}
-                />
-                <span>{runtime.t('fieldReveal')}</span>
-              </label>
-            </div>
-          </div>
-          <div className="__ru_field">
-            <span className="__ru_fieldLabel">{runtime.t('fieldOnReady')}</span>
-            <div className="__ru_fieldBody">
-              <select
-                className="__ru_select"
-                value={onReady}
-                onChange={(event) => setOnReady(event.target.value)}
-                aria-label={runtime.t('fieldOnReady')}
-              >
-                <option value="">{runtime.t('fieldOnReadyNone')}</option>
-                {entries.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+      {/* 字段与提交钮是共享表单（编辑面板用同一份）；本面板独有的是上面的
+          候选/复制/帮助/建后反馈，以及「更多设置」末尾的图标/分组输入——
+          只写本机 layout.json，编辑已有条目时不出现。 */}
+      {TaskFormFields({
+        form,
+        onChange: setForm,
+        more,
+        onToggleMore: () => setMore(!more),
+        onReadyEntries: entries,
+        withPlaceholders: true,
+        advancedExtra: (
           <div className="__ru_field">
             <span className="__ru_fieldLabel">{runtime.t('fieldIcon')}</span>
             <div className="__ru_fieldBody">
@@ -2356,41 +2515,123 @@ function AddPanel(props: BarProps): React.ReactElement {
               </p>
             </div>
           </div>
-        </div>
-      ) : null}
-
-      <div className="__ru_sep" />
-      <div className="__ru_rowActions" style={{ justifyContent: 'flex-end' }}>
-        <button
-          type="button"
-          className="__ru_btn __ru_fixed"
-          disabled={
-            creating ||
-            projectRoot === null ||
-            label.trim().length === 0 ||
-            command.trim().length === 0
-          }
-          onClick={() => void submit()}
-        >
-          {creating ? '…' : runtime.t('newTaskCreate')}
-        </button>
-        <button type="button" className="__ru_btn" onClick={onClosePanel}>
-          {runtime.t('addClose')}
-        </button>
-      </div>
+        ),
+        runtime,
+        submitDisabled:
+          creating || projectRoot === null || form.label.trim().length === 0 || form.command.trim().length === 0,
+        submitLabel: creating ? '…' : runtime.t('newTaskCreate'),
+        onSubmit: () => void submit(),
+        closeLabel: runtime.t('addClose'),
+        onClosePanel,
+      })}
     </div>
   );
 }
 
 /**
- * ☰ 管理面板：**排序 + 从条上移除 / 钉回**。
+ * 「编辑」面板：**替换清单里已有的那条 task**。
  *
- * 为什么不拆成两个按钮：这两件事都是在管"这条按钮在不在条上、排第几"，
- * 在同一个列表里拖一下、点一下最顺手，眼睛不用在两个面板之间来回换。
- * 新建任务属于另一件事，在 `+` 面板里。
+ * 表单与 `+` 面板共用同一份（`TaskFormFields`——字段、校验入口、提交钮都只有一处），
+ * 这里只剩编辑自己的三件事：从 `raw` 预填、`onReady` 候选排除自己、成功后提示
+ * "已写回"（改了 id 时顺带说明外观会跟着搬）。
+ */
+function EditPanel(props: {
+  /** 被编辑那条的**旧** entry id（替换目标；表单预填也从它取 raw）。 */
+  entryId: string;
+  entries: ResolvedEntry[];
+  runtime: Runtime;
+  projectRoot: string | null;
+  onUpdateTask(
+    entryId: string,
+    input: NewTaskInput,
+  ): Promise<ApiResult<{ entry: string }>>;
+  onClosePanel(): void;
+}): React.ReactElement {
+  const { entryId, entries, runtime, projectRoot, onUpdateTask, onClosePanel } = props;
+  const raw = entries.find((candidate) => candidate.id === entryId)?.raw;
+
+  // 预填走共享纯函数：变量不展开、cwd 保持相对——改一个字段落盘时，
+  // 其余字段还是清单里原来的写法，不会悄悄被绝对路径化。
+  const [form, setForm] = React.useState<TaskFormState>(() =>
+    raw === undefined ? blankTaskForm() : taskFormFromRaw(raw),
+  );
+  const [more, setMore] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [saved, setSaved] = React.useState(false);
+
+  const submit = async (): Promise<void> => {
+    if (saving || raw === undefined) return;
+    if (form.label.trim().length === 0 || form.command.trim().length === 0) return;
+
+    const parsedEnv = parseEnvLines(form.envText);
+    if (parsedEnv.error !== undefined) {
+      setError(`${runtime.t('fieldEnvInvalid')}${parsedEnv.error}`);
+      setMore(true);
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const result = await onUpdateTask(entryId, taskInputFromForm(form));
+      if (!result.ok) {
+        setError(result.hint !== undefined ? `${result.message}（${result.hint}）` : result.message);
+        return;
+      }
+      setSaved(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <h4 className="__ru_popTitle">{runtime.t('editTitle')}</h4>
+      <p className="__ru_popHint">{runtime.t('editHint')}</p>
+      {error !== null ? <p className="__ru_error">❌ {error}</p> : null}
+      {saved ? (
+        <p className="__ru_popHint">
+          ✓ {runtime.t('editSaved')} {form.entryId.trim() !== '' && form.entryId.trim() !== entryId
+            ? runtime.t('editIdFixed')
+            : null}
+        </p>
+      ) : null}
+      {raw === undefined ? <p className="__ru_error">❌ {runtime.t('noFocus')}</p> : null}
+
+      {TaskFormFields({
+        form,
+        onChange: (next) => {
+          setForm(next);
+          setSaved(false);
+        },
+        more,
+        onToggleMore: () => setMore(!more),
+        onReadyEntries: entries.filter((candidate) => candidate.id !== entryId),
+        withPlaceholders: false,
+        idHint: runtime.t('editIdFixed'),
+        runtime,
+        submitDisabled:
+          saving ||
+          projectRoot === null ||
+          raw === undefined ||
+          form.label.trim().length === 0 ||
+          form.command.trim().length === 0,
+        submitLabel: saving ? '…' : runtime.t('editSave'),
+        onSubmit: () => void submit(),
+        closeLabel: runtime.t('addClose'),
+        onClosePanel,
+      })}
+    </div>
+  );
+}
+
+/**
+ * ☰ 管理面板：**排序 + 从条上移除 / 钉回 + 编辑**（编辑表单在上面的 `EditPanel`）。
  */
 function ManagePanel(props: BarProps): React.ReactElement {
-  const { entries, runtime, projectRoot, buttons, onPin, onReorder, onClosePanel, onDeleteTask } = props;
+  const { entries, runtime, projectRoot, buttons, onPin, onReorder, onClosePanel, onDeleteTask, onOpenEdit } = props;
   const [order, setOrder] = React.useState<string[]>(() =>
     [...entries]
       .sort((left, right) => {
@@ -2690,6 +2931,14 @@ function ManagePanel(props: BarProps): React.ReactElement {
               <span className={pinned ? '__ru_tag __ru_tagOn' : '__ru_tag'}>
                 {pinned ? runtime.t('addPinned') : runtime.t('addUnpinned')}
               </span>
+              <button
+                type="button"
+                className="__ru_btn"
+                disabled={projectRoot === null}
+                onClick={() => onOpenEdit(entryId)}
+              >
+                {runtime.t('editEntry')}
+              </button>
               <button
                 type="button"
                 className="__ru_btn"
@@ -3199,7 +3448,11 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
    * 就是没有任何反馈（早先 host 只登记不执行，界面却显示"运行中"）。
    */
   const [lastError, setLastError] = React.useState<string | null>(null);
-  const [panel, setPanel] = React.useState<'none' | 'add' | 'manage' | 'settings' | 'error' | 'overflow'>('none');
+  const [panel, setPanel] = React.useState<
+    'none' | 'add' | 'manage' | 'edit' | 'settings' | 'error' | 'overflow'
+  >('none');
+  /** 「编辑」面板正在改哪条（旧 entry id）。 */
+  const [editingEntry, setEditingEntry] = React.useState<string | null>(null);
   /** 输出悬浮卡钉在哪条 entry（null = 没钉；reveal:always 也会自动钉）。 */
   const [pinnedEntry, setPinnedEntry] = React.useState<string | null>(null);
   /**
@@ -3364,12 +3617,17 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       busy={busy}
       actions={actions}
       openPanel={panel}
+      editingEntry={editingEntry}
       onClosePanel={() => setPanel('none')}
       lastError={lastError}
       onOpenOverflow={() => setPanel('overflow')}
       onCycleDensity={() => setDensity(nextDensity())}
       onOpenAdd={() => setPanel(panel === 'add' ? 'none' : 'add')}
       onOpenManage={() => setPanel(panel === 'manage' ? 'none' : 'manage')}
+      onOpenEdit={(entryId) => {
+        setEditingEntry(entryId);
+        setPanel('edit');
+      }}
       onOpenSettings={() => setPanel(panel === 'settings' ? 'none' : 'settings')}
       onOpenError={() => setPanel(panel === 'error' ? 'none' : 'error')}
       pinnedEntry={pinnedEntry}
@@ -3419,6 +3677,15 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
           return { ok: false, code: 'NOT_FOUND', message: runtime.t('noFocus') };
         }
         const result = await deleteTask(root, entryId);
+        if (result.ok) await pull();
+        return result;
+      }}
+      onUpdateTask={async (entryId, input) => {
+        const root = state.focused?.projectRoot ?? null;
+        if (root === null) {
+          return { ok: false, code: 'NOT_FOUND', message: runtime.t('noFocus') };
+        }
+        const result = await updateTask(root, entryId, input);
         if (result.ok) await pull();
         return result;
       }}
@@ -3523,6 +3790,7 @@ const plugin = {
 export default Object.assign(plugin, {
   internals: {
     AddPanel,
+    EditPanel,
     CLIENT_VERSION,
     COMPACT_MAX_CHARS,
     CSS,

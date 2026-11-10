@@ -314,10 +314,12 @@ await (async () => {
       onCycleDensity: () => {},
       onOpenAdd: () => {},
       onOpenManage: () => {},
+      onOpenEdit: () => {},
       onOpenSettings: () => {},
       onOpenError: () => {},
       onOpenOverflow: () => {},
       openPanel: 'none',
+      editingEntry: null,
       onClosePanel: () => {},
       entries: [],
       projectRoot: 'D:/p',
@@ -329,6 +331,7 @@ await (async () => {
       onPin: async () => {},
       onCreateTask: async () => ({ ok: true, entry: 'x' }),
       onDeleteTask: async () => ({ ok: true }),
+      onUpdateTask: async () => ({ ok: true, entry: 'x' }),
       lastError: null,
       pinnedEntry: null,
       onTogglePin: () => {},
@@ -419,6 +422,7 @@ await (async () => {
     for (const key of [
       'run', 'stop', 'densityFull', 'densityCompact', 'densityIcon', 'densityCycle',
       'overflow', 'add', 'settings', 'createTitle', 'createHelp', 'helpToggle', 'manageTitle',
+      'editEntry', 'editSave', 'editTitle', 'editHint', 'editSaved', 'editIdFixed',
       'addPinned', 'addUnpinned',
       'addPin', 'addHide', 'settingsTitle', 'settingsDensity', 'settingsRuns',
       'settingsWarnings', 'settingsCapability', 'noFocus',
@@ -454,10 +458,12 @@ await (async () => {
     onCycleDensity: () => {},
     onOpenAdd: () => {},
     onOpenManage: () => {},
+    onOpenEdit: () => {},
     onOpenSettings: () => {},
     onOpenError: () => {},
     onOpenOverflow: () => {},
     openPanel: 'none',
+    editingEntry: null,
     onClosePanel: () => {},
     entries: [],
     projectRoot: 'D:/p',
@@ -469,6 +475,7 @@ await (async () => {
     onPin: async () => {},
     onCreateTask: async () => ({ ok: true, entry: 'x' }),
     onDeleteTask: async () => ({ ok: true }),
+    onUpdateTask: async () => ({ ok: true, entry: 'x' }),
     lastError: null,
     pinnedEntry: null,
     onTogglePin: () => {},
@@ -542,6 +549,204 @@ await (async () => {
     hideBtn.props.onClick();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(calls.pin[0], ['piscellum/launch', false], '点「收起」调用的是 onPin(entry, false)');
+
+    // 每一行还有一个「编辑」：点击 → onOpenEdit(那一行的 entry id)
+    const editCalls = [];
+    const editProps = {
+      ...props,
+      onOpenEdit: (entryId) => editCalls.push(entryId),
+    };
+    const m2 = mountInteractions('ManagePanel', editProps);
+    const editButtons = () => m2.buttonsIn(m2.tree).filter((node) => m2.buttonText(node) === x.ZH.editEntry);
+    assert.equal(editButtons().length, 2, '每一行一个「编辑」');
+    editButtons()[1].props.onClick();
+    assert.deepEqual(editCalls, ['piscellum/client'], '点「编辑」要带上那一行的 entry id');
+  });
+
+  /* ── 交互级：编辑面板 ── */
+
+  await check('编辑面板：预填清单原样字段、保存调 onUpdateTask(旧id, input)、改 id 成功后提示', async () => {
+    const entries = [
+      {
+        id: 'api',
+        label: 'api',
+        command: 'node',
+        args: ['server.js'],
+        cwd: 'D:/p',
+        raw: {
+          label: 'api',
+          id: 'api',
+          command: 'node',
+          args: ['server.js'],
+          options: { cwd: 'bin' },
+          isBackground: true,
+          problemMatcher: { background: { endsPattern: 'Local:' } },
+          presentation: { reveal: 'always' },
+        },
+      },
+      { id: 'other', label: '其他条目', command: 'echo', args: [], cwd: 'D:/p' },
+    ];
+    const calls = [];
+    const props = {
+      entryId: 'api',
+      entries,
+      runtime: { t: zh },
+      projectRoot: 'D:/p',
+      onUpdateTask: async (entryId, input) => {
+        calls.push([entryId, input]);
+        return { ok: true, entry: input.id ?? entryId };
+      },
+      onClosePanel: () => {},
+    };
+    const m = mountInteractions('EditPanel', props);
+
+    // 预填：名称/命令来自 raw（args 拼回一行），cwd 保持清单原样的相对写法
+    const inputs = () => m.inTree(m.tree, (node) => node.type === 'input');
+    const valueOf = (input) => input.props.value;
+    assert.equal(valueOf(inputs()[0]), 'api', '名称要预填');
+    assert.equal(valueOf(inputs()[1]), 'node server.js', '命令要预填成一行');
+    // cwd 在「更多设置」里：展开后它预填的是 raw 的原样值（bin，不是绝对路径）
+    const moreToggle = m.buttonsIn(m.tree).find((node) =>
+      (m.buttonText(node) ?? '').includes(x.ZH.moreShow),
+    );
+    moreToggle.props.onClick();
+    m.flush();
+    const expandedInputs = () => m.inTree(m.tree, (node) => node.type === 'input');
+    assert.equal(expandedInputs()[2].props.value, 'bin', 'cwd 预填的是清单原样值');
+
+    // 改名称与 id，保存：第一个参数是旧 id（替换目标），第二个是收敛后的字段
+    const nameInput = expandedInputs()[0];
+    nameInput.props.onChange({ target: { value: 'API dev' } });
+    m.flush();
+    const idInput = expandedInputs()[3];
+    idInput.props.onChange({ target: { value: 'api-dev' } });
+    m.flush();
+    const save = m.buttonsIn(m.tree).find((node) => m.buttonText(node) === x.ZH.editSave);
+    assert.ok(save, '缺「保存」按钮');
+    save.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    m.flush();
+    assert.equal(calls.length, 1, JSON.stringify(calls));
+    assert.equal(calls[0][0], 'api', '提交的目标是旧 entry id');
+    assert.equal(calls[0][1].label, 'API dev');
+    assert.equal(calls[0][1].id, 'api-dev');
+    assert.equal(calls[0][1].cwd, 'bin');
+    assert.equal(calls[0][1].isBackground, true, '预填的长驻要随提交带上');
+    assert.equal(calls[0][1].readyPattern, 'Local:');
+
+    // 保存成功 + 改了 id：面板给出"已写回"和"外观搬到新 id"的说明
+    const texts = [];
+    m.walk(m.tree, (node) => {
+      for (const child of node.children ?? []) {
+        if (typeof child === 'string') texts.push(child);
+      }
+    });
+    assert.ok(texts.includes(x.ZH.editSaved), '保存成功要有反馈');
+    assert.ok(texts.includes(x.ZH.editIdFixed), '改了 id 要说明外观会跟着搬');
+  });
+
+  await check('编辑面板：保存与关闭在同一行（不许叠成两行）；提交钮文案是「保存」不是「编辑」', () => {
+    const entries = [
+      {
+        id: 'api',
+        label: 'api',
+        command: 'node',
+        args: [],
+        cwd: 'D:/p',
+        raw: { label: 'api', id: 'api', command: 'node' },
+      },
+    ];
+    const m = mountInteractions('EditPanel', {
+      entryId: 'api',
+      entries,
+      runtime: { t: zh },
+      projectRoot: 'D:/p',
+      onUpdateTask: async () => ({ ok: true, entry: 'api' }),
+      onClosePanel: () => {},
+    });
+    // 找到同时含「保存」与「关闭」的那个 __ru_rowActions 容器
+    const actionRows = m.inTree(
+      m.tree,
+      (node) => node.props?.className === '__ru_rowActions',
+    );
+    const combined = actionRows.filter((row) => {
+      const labels = m.buttonsIn({ props: {}, children: [row] }).map((node) => m.buttonText(node));
+      return labels.includes(x.ZH.editSave) && labels.includes(x.ZH.addClose);
+    });
+    assert.equal(combined.length, 1, '保存与关闭必须落在同一个按钮行里');
+    // 全树只有一颗「保存」、一颗「关闭」——多出来的都是叠行的残留
+    assert.equal(
+      m.buttonsIn(m.tree).filter((node) => m.buttonText(node) === x.ZH.editSave).length,
+      1,
+      '「保存」只能有一颗',
+    );
+    assert.equal(
+      m.buttonsIn(m.tree).filter((node) => m.buttonText(node) === x.ZH.addClose).length,
+      1,
+      '「关闭」只能有一颗',
+    );
+    // 文案不能再叫「编辑」：那是管理面板每行入口的名字，同屏两处同名会误导
+    assert.equal(
+      m.buttonsIn(m.tree).filter((node) => m.buttonText(node) === x.ZH.editEntry).length,
+      0,
+      '编辑面板内部不该再出现「编辑」按钮',
+    );
+  });
+
+  await check('编辑面板：坏输入不提交（host 校验报错原样显示）、onReady 下拉不含自己', async () => {
+    const entries = [
+      {
+        id: 'api',
+        label: 'api',
+        command: 'node',
+        args: [],
+        cwd: 'D:/p',
+        raw: { label: 'api', id: 'api', command: 'node' },
+      },
+      { id: 'other', label: '其他条目', command: 'echo', args: [], cwd: 'D:/p' },
+    ];
+    const calls = [];
+    const props = {
+      entryId: 'api',
+      entries,
+      runtime: { t: zh },
+      projectRoot: 'D:/p',
+      onUpdateTask: async (entryId, input) => {
+        calls.push([entryId, input]);
+        return { ok: false, code: 'BAD_REQUEST', message: 'id 只能由字母、数字、点、下划线、连字符组成' };
+      },
+      onClosePanel: () => {},
+    };
+    const m = mountInteractions('EditPanel', props);
+
+    // onReady 下拉：不能出现被编辑条目自己（接续自己 = 死循环）
+    const moreToggle = m.buttonsIn(m.tree).find((node) =>
+      (m.buttonText(node) ?? '').includes(x.ZH.moreShow),
+    );
+    moreToggle.props.onClick();
+    m.flush();
+    const options = m.inTree(m.tree, (node) => node.type === 'option').map((node) => node.props.value);
+    assert.ok(!options.includes('api'), `onReady 候选不该含自己：${JSON.stringify(options)}`);
+    assert.ok(options.includes('other'), '别的条目仍然可选');
+
+    // host 校验失败：错误原文显示，且状态回不到"已保存"
+    m.buttonsIn(m.tree)
+      .find((node) => m.buttonText(node) === x.ZH.editSave)
+      .props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    m.flush();
+    assert.equal(calls.length, 1, '提交要发生一次');
+    const texts = [];
+    m.walk(m.tree, (node) => {
+      for (const child of node.children ?? []) {
+        if (typeof child === 'string') texts.push(child);
+      }
+    });
+    assert.ok(
+      texts.some((text) => text.includes('id 只能由字母')),
+      `host 的校验错误要原样显示：${JSON.stringify(texts)}`,
+    );
+    assert.ok(!texts.includes(x.ZH.editSaved), '失败时不能显示"已写回"');
   });
 
   /* ── 交互级：输出悬浮卡 ── */

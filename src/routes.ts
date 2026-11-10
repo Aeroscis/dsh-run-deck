@@ -435,6 +435,30 @@ export function createRoutes(host: RouteHost): RunDeckRoute[] {
       return manager.createTask(projectRoot, newTaskInputFromBody(body));
     }),
 
+    // 界面编辑启动项：原位替换项目 run.json 里那条 task（字段校验与新建同一份，
+    // 只是"自己占着自己的 id"不再算冲突）。只想改钉/序/图标的话走 /button——
+    // 那是本机 layout.json 的事，不进仓库。
+    route(`${API_PREFIX}/task/update`, 'POST', async (body) => {
+      const projectRoot = asString(body.projectRoot).trim();
+      const entryId = asString(body.entryId).trim();
+      if (projectRoot.length === 0 || entryId.length === 0) {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: '需要 projectRoot 与 entryId',
+        } satisfies ApiError;
+      }
+      const issues = collectFieldIssues(body);
+      if (issues.length > 0) {
+        return {
+          ok: false,
+          code: ERROR_CODES.badRequest,
+          message: `字段类型/取值不对：${issues.map((issue) => `${issue.field}（需 ${issue.expected}）`).join('；')}`,
+        } satisfies ApiError;
+      }
+      return manager.updateTask(projectRoot, entryId, newTaskInputFromBody(body));
+    }),
+
     // 「+」面板的候选检测：读这个项目的 package.json scripts。
     // 只读、不落盘、不执行——结果只用来预填表单（"检测"与"创建"是两件事）。
     route(`${API_PREFIX}/detect`, 'POST', async (body) => {
