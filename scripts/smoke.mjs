@@ -3285,6 +3285,39 @@ await check('/api/run 收 inputValues 并透传（startRun 的缺值拒绝原样
   assert.equal(run.entryId, 'need');
 });
 
+await check('run-deck 工具的 schema 用 dsh-tools 的 defineTool 原样编译（写错当场炸，不能等宿主加载时崩）', async () => {
+  // 2026-11-12 真实事故：input_values 是 object 但没写 additionalProperties，
+  // dsh-tools 的作者校验直接 fatal load failure，插件服务进程退出。
+  // defineTool 是纯函数（离线可调），所以在这里原样编译一次 Parameters + Output。
+  let defineTool;
+  try {
+    ({ defineTool } = await import('@deepseek-ai/dsh-tools'));
+  } catch {
+    console.log('    – 跳过：装不上 @deepseek-ai/dsh-tools');
+    return;
+  }
+  const { TOOL_NAME, PARAMETERS, OUTPUT_SCHEMA } = await import(
+    new URL('../lib/tool.js', import.meta.url)
+  );
+  const tool = defineTool({
+    name: TOOL_NAME,
+    description: 'smoke',
+    parameters: PARAMETERS,
+    output: { schema: OUTPUT_SCHEMA, render: () => [{ type: 'text', text: '' }] },
+    execute: async () => ({ ok: true }),
+  });
+  assert.equal(tool.name, TOOL_NAME);
+
+  // 运行期校验也顺带走一遍：缺 action 抛错；带 input_values 的合法参数能到达 execute。
+  await assert.rejects(() => tool.execute({}), undefined, '缺 action 要被参数校验拦下');
+  const reached = await tool.execute({
+    action: 'run',
+    entry_id: 'some/entry',
+    input_values: { target: 'web' },
+  });
+  assert.equal(reached.ok, true, '合法参数（含 input_values）应通过校验到达 execute');
+});
+
 console.log(`\n${passed} checks passed${failed > 0 ? `, ${failed} FAILED` : ''}`);
 if (failed > 0) process.exitCode = 1;
 

@@ -41,8 +41,8 @@ const TOOL_DESCRIPTION = [
   'Call /run-deck list first when you do not know the entry id.',
 ].join(' ');
 
-/** 工具的参数 schema（JSON Schema 子集，与 dsh-tool-* 的写法一致）。 */
-const PARAMETERS = {
+/** 工具的参数 schema（JSON Schema 子集，与 dsh-tool-* 的写法一致）。导出给离线检查：smoke 用 dsh-tools 的 defineTool 原样编译它，schema 写错就当场炸。 */
+export const PARAMETERS = {
   action: {
     type: 'string',
     required: true,
@@ -55,6 +55,12 @@ const PARAMETERS = {
   },
   input_values: {
     type: 'object',
+    /**
+     * dsh-tools 的 schema 作者规则：object 的 additionalProperties 必须**显式**写
+     * 布尔值（缺了就是 fatal load failure，整个插件加载崩溃）。true = 键不限；
+     * 值的类型约束不归 schema 管——`asInputValues` 在分发时只收非空字符串。
+     */
+    additionalProperties: true,
     description:
       'Values for ${input:id} variables the entry references (action=run). Keys are input ids, e.g. {"mode":"web"}. '
       + 'Omit to use manifest defaults; an entry referencing an input without a default fails without these values.',
@@ -88,8 +94,8 @@ const PARAMETERS = {
   },
 } as const;
 
-/** 工具返回体的 schema。 */
-const OUTPUT_SCHEMA = {
+/** 工具返回体的 schema。导出给离线检查（同上）。 */
+export const OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
