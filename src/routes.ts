@@ -326,16 +326,24 @@ export function createRoutes(host: RouteHost): RunDeckRoute[] {
     }),
 
     // 跑一条 run：**真的开一条 PTY 把命令跑起来**（见 src/exec.ts）。
-    // body 里只有指针（projectRoot + entryId）+ 发起会话的 sessionId，
-    // **没有任何字段能塞进一条命令**——这是安全边界，不是省略。
+    // body 里只有指针（projectRoot + entryId）+ 发起会话的 sessionId，外加
+    // `inputValues`（`${input:id}` 的**本次运行**取值，只有引用了它的 entry 会看）。
+    // **没有任何字段能塞进一条命令**——命令本体永远来自 run.json，这是安全边界。
     route(`${API_PREFIX}/run`, 'POST', async (body) => {
       const target = pointer(body);
       if (!target.ok) return target;
       const sessionId = asString(body.sessionId).trim();
+      const inputValues: Record<string, string> = {};
+      if (body.inputValues !== null && typeof body.inputValues === 'object' && !Array.isArray(body.inputValues)) {
+        for (const [key, value] of Object.entries(body.inputValues as Record<string, unknown>)) {
+          if (typeof value === 'string' && value.length > 0) inputValues[key] = value;
+        }
+      }
       return manager.startRun({
         projectRoot: target.projectRoot,
         entryId: target.entryId,
         ...(sessionId.length > 0 ? { sessionId } : {}),
+        ...(Object.keys(inputValues).length > 0 ? { inputValues } : {}),
       });
     }),
 

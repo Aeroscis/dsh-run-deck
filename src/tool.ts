@@ -53,6 +53,12 @@ const PARAMETERS = {
     type: 'string',
     description: 'Entry id from the manifest (e.g. "jin/web"). Required for action=run.',
   },
+  input_values: {
+    type: 'object',
+    description:
+      'Values for ${input:id} variables the entry references (action=run). Keys are input ids, e.g. {"mode":"web"}. '
+      + 'Omit to use manifest defaults; an entry referencing an input without a default fails without these values.',
+  },
   run_id: {
     type: 'string',
     description: 'Run id returned by a previous action. Required for action=stop and action=rerun.',
@@ -150,6 +156,16 @@ export async function createToolEntry(
   };
 }
 
+/** 工具参数里 input_values 的收敛：只留字符串值（空串不算"给了"）。 */
+function asInputValues(value: unknown): Record<string, string> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof item === 'string' && item.length > 0) out[key] = item;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /**
  * 工具参数 → manager 调用。
  *
@@ -167,7 +183,11 @@ export async function dispatchToolArgs(
   args: Record<string, unknown>,
   host: {
     listEntries(): Array<{ projectRoot: string; entryId: string }>;
-    run(projectRoot: string, entryId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string }>;
+    run(
+      projectRoot: string,
+      entryId: string,
+      inputValues?: Record<string, string>,
+    ): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string }>;
     stop(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
     rerun(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
     /** 「+」面板同款新建（可选：不提供就拒绝 action=create）。 */
@@ -177,7 +197,6 @@ export async function dispatchToolArgs(
   },
 ): Promise<Record<string, unknown>> {
   const action = typeof args['action'] === 'string' ? args['action'].trim() : '';
-
   if (action === 'create') {
     if (host.create === undefined) {
       return flatten({ ok: false, message: '这个入口不支持 create' });
@@ -235,7 +254,7 @@ export async function dispatchToolArgs(
     if (found === undefined) {
       return flatten({ ok: false, entry_id: entryId, message: `找不到 id 为 ${entryId} 的条目` });
     }
-    const result = await host.run(found.projectRoot, found.entryId);
+    const result = await host.run(found.projectRoot, found.entryId, asInputValues(args['input_values']));
     if (!result.ok) return flatten({ ok: false, entry_id: entryId, message: result.message });
     return flatten({
       ok: true,
@@ -274,7 +293,11 @@ export async function dispatchToolArgs(
 /** 供 `dispatchToolArgs` 用的最小 manager 面（也便于测试替身）。 */
 export interface RunDeckToolHost {
   listEntries(): Array<{ projectRoot: string; entryId: string }>;
-  run(projectRoot: string, entryId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string }>;
+  run(
+    projectRoot: string,
+    entryId: string,
+    inputValues?: Record<string, string>,
+  ): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string }>;
   stop(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
   rerun(runId: string): Promise<{ ok: boolean; message?: string; runId?: string; label?: string; status?: string; entryId?: string }>;
   /** 「+」面板同款新建（可选：不提供就拒绝 action=create）。 */
@@ -319,7 +342,12 @@ export async function registerRunDeckTool(
       manager.listProjects().flatMap((project) =>
         project.entries.map((entry) => ({ projectRoot: project.root, entryId: entry.id })),
       ),
-    run: (projectRoot, entryId) => manager.startRun({ projectRoot, entryId }),
+    run: (projectRoot, entryId, inputValues) =>
+      manager.startRun({
+        projectRoot,
+        entryId,
+        ...(inputValues !== undefined ? { inputValues } : {}),
+      }),
     stop: (runId) => manager.stopRun(runId),
     rerun: (runId) => manager.rerun(runId),
     create: (projectRoot, input) => createToolEntry(manager, projectRoot, input),
@@ -359,10 +387,11 @@ export async function registerRunDeckTool(
       const ownerSessionId = exec?.agent?.id;
       const callHost: RunDeckToolHost = {
         listEntries: host.listEntries,
-        run: (projectRoot, entryId) =>
+        run: (projectRoot, entryId, inputValues) =>
           manager.startRun({
             projectRoot,
             entryId,
+            ...(inputValues !== undefined ? { inputValues } : {}),
             ...(ownerSessionId !== undefined ? { sessionId: ownerSessionId } : {}),
           }),
         stop: (runId) => manager.stopRun(runId),

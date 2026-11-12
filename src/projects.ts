@@ -13,7 +13,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { basename, isAbsolute, join } from 'node:path';
 
-import { coerceEntry, deriveId, expandVariables, resolveInputs } from './config.js';
+import { coerceEntry, deriveId, effectiveInputValues, expandVariables } from './config.js';
 import {
   ERROR_CODES,
   type ApiError,
@@ -162,15 +162,23 @@ export function coerceDocument(raw: Record<string, unknown>): {
       const options = Array.isArray(item['options'])
         ? item['options'].filter((option): option is string => typeof option === 'string')
         : [];
-      if (id === undefined || options.length === 0 || item['type'] !== 'pickString') {
-        warnings.push('inputs[] 里有一条不是合法的 pickString（需要 id / type / options），已忽略');
+      const type = item['type'];
+      const fallback = typeof item['default'] === 'string' ? item['default'] : undefined;
+      const description = typeof item['description'] === 'string' ? item['description'] : undefined;
+      if (id === undefined || (type !== 'pickString' && type !== 'promptString')) {
+        warnings.push('inputs[] 里有一条不认识的 type（只支持 pickString / promptString），已忽略');
+        continue;
+      }
+      if (type === 'pickString' && options.length === 0) {
+        warnings.push(`inputs[] 的「${id}」是 pickString 但没有可选项，已忽略`);
         continue;
       }
       inputs.push({
         id,
-        type: 'pickString',
-        options,
-        ...(typeof item['default'] === 'string' ? { default: item['default'] } : {}),
+        type,
+        ...(options.length > 0 ? { options } : {}),
+        ...(fallback !== undefined ? { default: fallback } : {}),
+        ...(description !== undefined ? { description } : {}),
       });
     }
   }
@@ -229,10 +237,91 @@ export function coerceDocument(raw: Record<string, unknown>): {
   return { document, warnings };
 }
 
+/**
+ * 单条 entry 的字段解析：变量展开 + `requiredInputs` 计算（id 由调用方定）。
+ *
+ * `values` 是**本次运行**的 input 取值表（`effectiveInputValues` 的结果）。加载清单
+ * 时它来自默认值；跑之前重展开时它还叠着现场填的值——同一份逻辑保证两条路的
+ * 展开结果一致（`expandEntryForRun` 就是在这里套一层）。
+ *
+ * `requiredInputs`：扫原样文本（label/command/args/cwd/env 值）里的 `${input:id}`，
+ * 其中**取值表里没有**且属于 promptString 的，记成"本次运行还缺这个值"。
+ * pickString / 带默认值的 promptString 永远有值（默认值兜底），不会出现在这里。
+ */
+function resolveEntryFields(
+  root: string,
+  entry: TaskEntry,
+  manifestInputs: InputVariable[],
+  values: Record<string, string>,
+): Omit<ResolvedEntry, 'id'> {
+  const env = process.env as Record<string, string | undefined>;
+  const context = { workspaceFolder: root, inputs: values, env };
+  const cwdRaw = entry.options?.cwd ?? '${workspaceFolder}';
+  const expandedCwd = expandVariables(cwdRaw, context);
+  // 相对 cwd 是**相对 workspaceFolder** 解析的（VS Code 同义）。这一步必须在这里做：
+  // `spawnTerminal` 拿到的是原样字符串，而宿主的进程工作目录不是项目根目录——
+  // 直接把 'apps/web' 递下去，跑起来的是"宿主进程旁边的 apps/web"，不是项目里的。
+  const cwd = normalizeRoot(
+    isAbsolute(expandedCwd) ? expandedCwd : join(root, expandedCwd),
+  );
+
+  const envResolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(entry.options?.env ?? {})) {
+    envResolved[key] = expandVariables(value, context);
+  }
+
+  // 原样文本里引用了哪些 input（重展开前先扫，展开后就没有 ${input:…} 了）。
+  const referenced = new Set<string>();
+  const scan = (text: string): void => {
+    for (const match of text.matchAll(/\$\{input:([^}]+)\}/gu)) {
+      const name = (match[1] ?? '').trim();
+      if (name.length > 0) referenced.add(name);
+    }
+  };
+  scan(entry.label);
+  scan(entry.command);
+  for (const arg of entry.args ?? []) scan(arg);
+  if (entry.options?.cwd !== undefined) scan(entry.options.cwd);
+  for (const value of Object.values(entry.options?.env ?? {})) scan(value);
+
+  const requiredInputs = manifestInputs
+    .filter((input) => referenced.has(input.id) && values[input.id] === undefined)
+    .map((input) => ({
+      id: input.id,
+      ...(input.default !== undefined ? { default: input.default } : {}),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+    }));
+
+  return {
+    // label 也走变量展开：配置里写 "Ceola · desktop (${input:mode})" 时，
+    // 界面与浮动按钮该显示展开后的值，而不是把模板原样端给人。
+    // （args / command / cwd 一向是展开的，label 不展开会显得不一致。）
+    label: expandVariables(entry.label, context),
+    type: entry.type ?? 'shell',
+    command: expandVariables(entry.command, context),
+    args: (entry.args ?? []).map((arg) => expandVariables(arg, context)),
+    cwd,
+    ...(Object.keys(envResolved).length > 0 ? { env: envResolved } : {}),
+    isBackground: entry.isBackground === true,
+    ...(entry.problemMatcher !== undefined ? { problemMatcher: entry.problemMatcher } : {}),
+    ...(entry.serverReadyAction !== undefined
+      ? { serverReadyAction: entry.serverReadyAction }
+      : {}),
+    ...(entry.presentation !== undefined ? { presentation: entry.presentation } : {}),
+    group: entry.group ?? 'none',
+    ...(entry.runOptions?.runOn === 'folderOpen' ? { runOn: 'folderOpen' as const } : {}),
+    ...(requiredInputs.length > 0 ? { requiredInputs } : {}),
+    ...(entry.onReady !== undefined ? { onReady: entry.onReady } : {}),
+    // 原样保留一条：`+` 面板的「从已有条目复制」必须拿未展开的字段
+    // （否则 `${workspaceFolder}` 会变成这台机器的绝对路径）。
+    raw: entry,
+  };
+}
+
 /** 把 manifest 里的 tasks[] 解析成 ResolvedEntry[]（补齐 id、展开变量）。 */
 export function resolveEntries(root: string, document: RunConfigDocument): ResolvedEntry[] {
-  const inputs = resolveInputs(document.inputs ?? []);
-  const env = process.env as Record<string, string | undefined>;
+  const manifestInputs = document.inputs ?? [];
+  const values = effectiveInputValues(manifestInputs);
   const taken = new Set<string>();
   const resolved: ResolvedEntry[] = [];
 
@@ -246,46 +335,26 @@ export function resolveEntries(root: string, document: RunConfigDocument): Resol
           : deriveId(entry.label, taken);
     taken.add(id);
 
-    const context = { workspaceFolder: root, inputs, env };
-    const cwdRaw = entry.options?.cwd ?? '${workspaceFolder}';
-    const expandedCwd = expandVariables(cwdRaw, context);
-    // 相对 cwd 是**相对 workspaceFolder** 解析的（VS Code 同义）。这一步必须在这里做：
-    // `spawnTerminal` 拿到的是原样字符串，而宿主的进程工作目录不是项目根目录——
-    // 直接把 'apps/web' 递下去，跑起来的是"宿主进程旁边的 apps/web"，不是项目里的。
-    const cwd = normalizeRoot(
-      isAbsolute(expandedCwd) ? expandedCwd : join(root, expandedCwd),
-    );
-
-    const envResolved: Record<string, string> = {};
-    for (const [key, value] of Object.entries(entry.options?.env ?? {})) {
-      envResolved[key] = expandVariables(value, context);
-    }
-
-    resolved.push({
-      id,
-      // label 也走变量展开：配置里写 "Ceola · desktop (${input:mode})" 时，
-      // 界面与浮动按钮该显示展开后的值，而不是把模板原样端给人。
-      // （args / command / cwd 一向是展开的，label 不展开会显得不一致。）
-      label: expandVariables(entry.label, context),
-      type: entry.type ?? 'shell',
-      command: expandVariables(entry.command, context),
-      args: (entry.args ?? []).map((arg) => expandVariables(arg, context)),
-      cwd,
-      ...(Object.keys(envResolved).length > 0 ? { env: envResolved } : {}),
-      isBackground: entry.isBackground === true,
-      ...(entry.problemMatcher !== undefined ? { problemMatcher: entry.problemMatcher } : {}),
-      ...(entry.serverReadyAction !== undefined
-        ? { serverReadyAction: entry.serverReadyAction }
-        : {}),
-      ...(entry.presentation !== undefined ? { presentation: entry.presentation } : {}),
-      group: entry.group ?? 'none',
-      ...(entry.onReady !== undefined ? { onReady: entry.onReady } : {}),
-      // 原样保留一条：`+` 面板的「从已有条目复制」必须拿未展开的字段
-      // （否则 `${workspaceFolder}` 会变成这台机器的绝对路径）。
-      raw: entry,
-    });
+    resolved.push({ id, ...resolveEntryFields(root, entry, manifestInputs, values) });
   }
   return resolved;
+}
+
+/**
+ * 一次运行前的**重展开**：拿清单里原样的 entry（`ResolvedEntry.raw`），把本次运行
+ * 现场给的 input 值叠进默认值再解析一遍。
+ *
+ * 为什么不能只在加载时展开一次：promptString 的意义就是"值每次跑的时候才定"。
+ * 加载时只展开默认值；点跑（带 `inputValues`）时从这里重展开，命令/参数/cwd 才
+ * 是这次真正要跑的形态。id 由调用方回填（重算派生 id 可能与加载时不同）。
+ */
+export function expandEntryForRun(
+  root: string,
+  entry: TaskEntry,
+  manifestInputs: InputVariable[],
+  overrides: Record<string, string>,
+): Omit<ResolvedEntry, 'id'> {
+  return resolveEntryFields(root, entry, manifestInputs, effectiveInputValues(manifestInputs, overrides));
 }
 
 export interface LoadProjectsOptions {

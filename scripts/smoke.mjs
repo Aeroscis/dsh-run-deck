@@ -3091,6 +3091,200 @@ await check('tail 只留最近 200 行（输出面板要能看清"最近发生�
   assert.equal(run.tail.at(-1), '第 229 行');
 });
 
+/* ================================================================== *
+ * promptString（跑前填值）与 runOptions.runOn: "folderOpen"（宿主启动自动跑）
+ * ================================================================== */
+
+const PROMPT_MANIFEST = {
+  version: '2.0.0',
+  inputs: [
+    { id: 'mode', type: 'pickString', options: ['dev', 'release'], default: 'dev' },
+    { id: 'target', type: 'promptString', description: '构建目标' },
+    { id: 'suffix', type: 'promptString', description: '可留空的后缀', default: 'base' },
+  ],
+  tasks: [
+    {
+      label: '需要填值',
+      id: 'need',
+      command: 'node',
+      args: [
+        'build.js',
+        '--mode',
+        '${input:mode}',
+        '--target',
+        '${input:target}',
+        '--suffix',
+        '${input:suffix}',
+      ],
+    },
+    {
+      label: '自动跑',
+      id: 'auto',
+      command: 'python',
+      args: ['-m', 'server'],
+      runOptions: { runOn: 'folderOpen' },
+    },
+  ],
+};
+
+await check('promptString：requiredInputs 只列没有默认值的；其余加载时就用默认值展开', async () => {
+  const { manager, root } = await makeManager(PROMPT_MANIFEST);
+  const entry = manager.findEntry(root, 'need');
+  assert.deepEqual(
+    entry.requiredInputs.map((input) => input.id),
+    ['target'],
+    '只有 target 没有默认值（pickString 与带 default 的 promptString 都有兜底）',
+  );
+  assert.equal(entry.requiredInputs[0].description, '构建目标');
+  assert.deepEqual(entry.args, [
+    'build.js',
+    '--mode',
+    'dev',
+    '--target',
+    '${input:target}',
+    '--suffix',
+    'base',
+  ]);
+});
+
+await check('startRun：缺 requiredInputs 的值要拒绝执行；给了值就按"现场值 ?? 默认值"重展开', async () => {
+  const { manager, root, runtime } = await makeManager(PROMPT_MANIFEST);
+  const missing = await manager.startRun({ projectRoot: root, entryId: 'need' });
+  assert.equal(missing.ok, false);
+  assert.ok(missing.message.includes('target'), `缺的 input id 要出现在错误里：${missing.message}`);
+  assert.equal(runtime.calls.spawn.length, 0, '拒绝执行就不该起进程');
+
+  const started = await manager.startRun({
+    projectRoot: root,
+    entryId: 'need',
+    inputValues: { target: 'web', suffix: 'extra' },
+  });
+  assert.equal(started.ok, true);
+  const commandLine = runtime.calls.spawn[0].argv.at(-1);
+  assert.ok(commandLine.includes('--target web'), `现场值要进命令行：${commandLine}`);
+  assert.ok(commandLine.includes('--suffix extra'), '现场值能覆盖带默认值的 promptString');
+  assert.ok(commandLine.includes('--mode dev'), '没给的 input 用清单默认值（pickString）');
+});
+
+await check('runOn: "folderOpen"——宿主启动自动跑：只跑声明的、要填值的跳过、闸门只开一次', async () => {
+  const manifest = {
+    version: '2.0.0',
+    inputs: [{ id: 'who', type: 'promptString' }],
+    tasks: [
+      {
+        label: 'auto',
+        id: 'auto',
+        command: 'python',
+        args: ['-m', 'server'],
+        runOptions: { runOn: 'folderOpen' },
+      },
+      {
+        label: 'auto-needs-value',
+        id: 'needv',
+        command: 'node',
+        args: ['x.js', '${input:who}'],
+        runOptions: { runOn: 'folderOpen' },
+      },
+      { label: 'manual', id: 'manual', command: 'node', args: ['y.js'] },
+    ],
+  };
+  const logs = [];
+  const { manager, runtime } = await makeManager(manifest, { logs });
+  await manager.autoStartOnLaunch();
+  assert.equal(runtime.calls.spawn.length, 1, '只自动跑 auto（要填值的跳过，manual 没声明）');
+  assert.ok(runtime.calls.spawn[0].argv.at(-1).includes('-m server'));
+  await manager.autoStartOnLaunch();
+  assert.equal(runtime.calls.spawn.length, 1, 'autoStartOnLaunch 在每个宿主进程里只触发一轮');
+  assert.ok(logs.some((line) => line.includes('info:启动自动跑：')), '日志要留下自动跑的痕迹');
+  assert.ok(
+    logs.some((line) => line.includes('promptString')),
+    '被跳过的条目要在日志里说明原因',
+  );
+});
+
+await check('执行缝一直不可用时，自动跑放弃并留一行可读的日志（不死等）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'run-deck-autostart-'));
+  mkdirSync(join(dir, '.dsh', 'run-deck'), { recursive: true });
+  writeFileSync(
+    join(dir, '.dsh', 'run-deck', 'run.json'),
+    JSON.stringify({
+      version: '2.0.0',
+      tasks: [{ label: 'auto', id: 'auto', command: 'python', runOptions: { runOn: 'folderOpen' } }],
+    }),
+    'utf8',
+  );
+  const dataDir = mkdtempSync(join(tmpdir(), 'run-deck-autostartdata-'));
+  const logs = [];
+  const { RunDeckManager } = await import(new URL('../lib/manager.js', import.meta.url));
+  const manager = new RunDeckManager({
+    ctx: { get: () => undefined },
+    version: '0.0.0',
+    config: () => ({ dataDir, configPath: dir }),
+    configSource: () => 'defaults',
+    log: (level, message) => logs.push(`${level}:${message}`),
+    autoStartRetryMs: 1,
+    autoStartAttempts: 1,
+  });
+  await manager.initialize();
+  await manager.autoStartOnLaunch();
+  assert.ok(
+    logs.some((line) => line.includes('warn:启动自动跑放弃')),
+    '要有"放弃"的一行日志',
+  );
+});
+
+await check('界面编辑一条带 runOn 的条目：表单没有的字段不丢（runOn 与 beginsPattern 原样保留）', async () => {
+  const manifest = {
+    version: '2.0.0',
+    tasks: [
+      {
+        label: 'server',
+        id: 'server',
+        command: 'python',
+        args: ['-m', 'server'],
+        isBackground: true,
+        problemMatcher: {
+          background: { activeOnStart: true, beginsPattern: '·', endsPattern: 'ready at (\\S+)' },
+        },
+        runOptions: { runOn: 'folderOpen' },
+      },
+    ],
+  };
+  const { manager, root } = await makeManager(manifest);
+  const updated = await manager.updateTask(root, 'server', {
+    label: 'server（改名）',
+    command: 'python -m server',
+    isBackground: true,
+    readyPattern: 'ready at (\\S+)',
+  });
+  assert.equal(updated.ok, true);
+  const entry = manager.findEntry(root, 'server');
+  assert.equal(entry.runOn, 'folderOpen', '改个名字不能把 folderOpen 摘掉');
+  assert.equal(entry.raw.problemMatcher.background.beginsPattern, '·', 'endsPattern 没动时 beginsPattern 保留');
+  assert.equal(entry.raw.problemMatcher.background.activeOnStart, true);
+  assert.equal(entry.label, 'server（改名）');
+});
+
+await check('/api/run 收 inputValues 并透传（startRun 的缺值拒绝原样返回）', async () => {
+  const { createRoutes } = await import(new URL('../lib/routes.js', import.meta.url));
+  const { manager, root } = await makeManager(PROMPT_MANIFEST);
+  const routes = createRoutes({ manager, ready: Promise.resolve(), trustedHosts: () => [], log: () => {} });
+  const refused = await callRoute(routes, '/dsh-run-deck/api/run', '', {
+    method: 'POST',
+    body: { projectRoot: root, entryId: 'need' },
+  });
+  assert.equal(refused.ok, false);
+  assert.ok(refused.message.includes('target'));
+
+  const started = await callRoute(routes, '/dsh-run-deck/api/run', '', {
+    method: 'POST',
+    body: { projectRoot: root, entryId: 'need', inputValues: { target: 'web' } },
+  });
+  assert.equal(started.ok, true, `带值应当起得来：${started.message}`);
+  const run = manager.getRun(started.runId);
+  assert.equal(run.entryId, 'need');
+});
+
 console.log(`\n${passed} checks passed${failed > 0 ? `, ${failed} FAILED` : ''}`);
 if (failed > 0) process.exitCode = 1;
 

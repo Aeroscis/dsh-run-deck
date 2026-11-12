@@ -205,7 +205,7 @@ shell 执行完就退，所以 `handle.done` 结算 = 这条任务结束，退�
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `version` | —— | 清单版本；不认识不报错，只告警 |
-| `inputs[]` | —— | `${input:id}` 的取值来源。只实现 `pickString` |
+| `inputs[]` | —— | `${input:id}` 的取值来源。实现 `pickString` 与 `promptString`；没有 `default` 的 `promptString` 要求每次运行前先填值（见下） |
 | `tasks[].label` | **必填** | 人读的标题，**可重名** |
 | `tasks[].id` | 由 label 派生 | 跨族唯一标识；重复时自动追加后缀 |
 | `tasks[].type` | `shell` | 只实现 `shell`（VS Code 的 `process` 需要 argv 数组，本插件不做） |
@@ -218,12 +218,24 @@ shell 执行完就退，所以 `handle.done` 结算 = 这条任务结束，退�
 | `tasks[].serverReadyAction` | —— | 只实现 `{ action: 'openExternally', pattern, uriFormat }` |
 | `tasks[].presentation` | —— | `panel` / `reveal` / `clear` |
 | `tasks[].group` | `none` | `build` / `test` / `none` |
+| `tasks[].runOptions.runOn` | —— | 只认 `"folderOpen"`：宿主启动后自动跑这一条（不需要点按钮）。其它值忽略并告警。`problemMatcher.background` 与 `serverReadyAction` 照常生效，就绪判定不变 |
 | `tasks[].onReady` | —— | 增量 2：entry id（不接受命令） |
 | `buttons[]` | —— | 增量 1：`entry` + `icon` + `group` + `label` + `order` |
 
 变量：`${input:id}` / `${workspaceFolder}` / `${env:NAME}`。**不发明新变量**——
 上一版被否掉的 `${ready.1}` 就是那种东西：它把「就绪」这个运行时状态变成模板变量，
 于是每条命令都要重新解释一遍执行时机。未知变量**原样留下**，让人看得出这里本该有值。
+
+`inputs[]` 两种类型的取值顺序都是**现场给的值优先，其次 `default`**（`pickString`
+没有 `default` 时取第一项）。差别在于没有默认值可取的时候：
+
+- `promptString` **没有 `default`**：点跑时界面先弹一个填值面板（每个 input 一栏，
+  `description` 是说明文字），填好才真的起进程。命令行 / `run-deck` 工具调用则必须带
+  `inputValues: { "<id>": "<值>" }`，缺了会拒绝执行并说明缺哪个。
+- `promptString` **有 `default`**：不弹面板，直接用默认值（调用方仍可用 `inputValues`
+  覆盖）。这与 VS Code"每次都先问、只是预填"不同——这里把那一次弹框省掉。
+- 带了无默认 `promptString` 的条目**不会被启动自动跑**（`runOn: "folderOpen"` 跳过它
+  并在日志里说明），自动运行无法提供交互。
 
 支持 JSON with comments（`//` 与 `/* */`，不在字符串内时）——配置文件里要写注释。
 
@@ -482,6 +494,7 @@ host 解析 cwd：ctx.sessions.get(id).header.cwd
 `/api/focus` 还能让**任意目录**成为焦点——不要求它先在 DSH 里注册成工作区。
 
 按钮点一下 = 跑；这一条正在跑时再点 = 停（`/api/run` 与 `/api/stop`）。
+条目引用了没有默认值的 `promptString` 时，点跑先弹一个填值面板（§5），填好才起进程。
 **它不新增任何执行能力**——与 `/run-deck run` 是同一条路径。
 
 ### 排障：怎么确认"客户端半边到底加载了没有"
@@ -653,7 +666,7 @@ Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-run-deck' -List | Select-
 
 | action | 参数 | 说明 |
 | --- | --- | --- |
-| `run` | `entry_id` | 按 id 精确定位并发起 |
+| `run` | `entry_id`（+ `input_values?`） | 按 id 精确定位并发起。`input_values` 是 `${input:id}` 的本次运行取值（如 `{"mode":"web"}`）；条目引用了没有默认值的 input 而没给时拒绝执行并说明缺哪个 |
 | `stop` | `run_id` | 停掉一个 run |
 | `rerun` | `run_id` | 停掉旧的再开新的，返回新 runId |
 | `create` | `label` + `command`（+ `project_root?` / `is_background?` / `ready_pattern?`） | 帮用户加一个启动按钮：与「+」面板同一条链路（校验 + 写进项目 run.json），按钮条 ≤3s 出现。缺 `project_root` 时用调用会话的 cwd |
@@ -692,7 +705,7 @@ Select-String -Path "$cache\*" -Pattern '@aeroscis/dsh-run-deck' -List | Select-
 | GET | `/state?sessionId=…`（或 `?cwd=…`） | 全量状态：焦点项目、它的 buttons[]、全部条目、runs、告警、能力。`sessionId` 由 host 解析成 cwd（内存会话存储 → 会话目录，见 §7）；两条路都会**现读**该目录的 `.dsh/run-deck/run.json` |
 | POST | `/ping` | `{stage, detail?}` 客户端半边的诊断上报，**只写 host 日志**（`client-loaded` / `slot-rendered` / `state-changed`） |
 | POST | `/refresh` | 重读**全部**清单（手动全量重读；单个清单改了其实不用它，见下） |
-| POST | `/run` | `{projectRoot, entryId, sessionId?}` 开一条 PTY 把这条 entry 跑起来（`sessionId` 只用于记录与 `DSH_SESSION_ID`；可以不给） |
+| POST | `/run` | `{projectRoot, entryId, sessionId?, inputValues?}` 开一条 PTY 把这条 entry 跑起来（`sessionId` 只用于记录与 `DSH_SESSION_ID`，可以不给；`inputValues` 是 `${input:id}` 的本次运行取值，只有引用了它的条目会读） |
 | POST | `/stop` | `{runId}` 停 |
 | POST | `/rerun` | `{runId}` 停旧的再开新的 |
 | POST | `/observe` | `{runId, line}` 推进钩子状态（第 3 步接线用） |

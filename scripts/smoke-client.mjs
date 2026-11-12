@@ -1290,6 +1290,103 @@ await (async () => {
     );
   });
 
+  /* ── 填值面板（promptString）护栏 ──
+   *
+   * 点跑先弹面板、值收齐才真的跑：这条链路断了的表现是"填了值还是跑旧的命令"，
+   * 或者"面板不见了值也丢了"，所以除了纯函数还要走一遍交互流。
+   */
+
+  await check('填值面板在 internals 与字典里；entryNeedsInputs 只认 requiredInputs 非空的条目', () => {
+    assert.equal(typeof x.InputPromptPanel, 'function', 'InputPromptPanel 不在 internals 上');
+    assert.equal(typeof x.entryNeedsInputs, 'function', 'entryNeedsInputs 不在 internals 上');
+    for (const key of ['inputsTitle', 'inputsHint', 'inputsSubmit', 'inputsCancel']) {
+      assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
+      assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
+    }
+    const entries = [
+      { id: 'plain', requiredInputs: undefined },
+      { id: 'needs', requiredInputs: [{ id: 'target' }] },
+    ];
+    assert.equal(x.entryNeedsInputs(entries, 'plain'), false);
+    assert.equal(x.entryNeedsInputs(entries, 'needs'), true);
+    assert.equal(x.entryNeedsInputs(entries, 'ghost'), false);
+  });
+
+  await check('填值面板交互流：空值不送；填好提交 → onRun 收到值、面板关闭', async () => {
+    const { exported, flushComponent } = loadPlugin({ interactive: true });
+    const internals = exported.internals;
+    const runtime = { t: (key) => internals.ZH[key] ?? key };
+    const submitted = [];
+    let closed = false;
+    const props = {
+      entry: {
+        id: 'need',
+        label: '需要填值',
+        command: 'node',
+        args: [],
+        cwd: 'D:/p',
+        isBackground: false,
+        group: 'none',
+        requiredInputs: [
+          { id: 'target', description: '构建目标' },
+          { id: 'suffix', default: 'base' },
+        ],
+      },
+      runtime,
+      onRun: async (values) => {
+        submitted.push(values);
+      },
+      onClosePanel: () => {
+        closed = true;
+      },
+    };
+
+    const texts = [];
+    const walkTree = (node, visit) => {
+      if (node === null || node === undefined) return;
+      if (Array.isArray(node)) {
+        for (const child of node) walkTree(child, visit);
+        return;
+      }
+      visit(node);
+      if (typeof node === 'object') walkTree(node.children, visit);
+    };
+    const collectTexts = (tree) => {
+      const out = [];
+      walkTree(tree, (node) => {
+        if (typeof node === 'string') out.push(node);
+      });
+      return out;
+    };
+
+    let tree = flushComponent(internals.InputPromptPanel, props);
+    texts.push(...collectTexts(tree));
+    assert.ok(texts.includes('构建目标'), 'description 要亮出来');
+    assert.ok(texts.includes('${input:target}') && texts.includes('${input:suffix}'), '亮出 input 的 id');
+
+    // 两个输入框：第一个是 target（没默认值），第二个是 suffix（默认 base）。
+    const inputs = [];
+    walkTree(tree, (node) => {
+      if (node.type === 'input') inputs.push(node);
+    });
+    assert.equal(inputs.length, 2, '每个 requiredInput 一个输入框');
+    inputs[0].props.onChange({ target: { value: 'web' } });
+    inputs[1].props.onChange({ target: { value: '' } });
+    tree = flushComponent(internals.InputPromptPanel, props);
+
+    // 点「填好，跑」：只有 target 有值 → onRun 收 {target:'web'}，空值不送
+    const buttons = [];
+    walkTree(tree, (node) => {
+      if (node.type === 'button') buttons.push(node);
+    });
+    const submit = buttons.find((button) => collectTexts([button]).includes(runtime.t('inputsSubmit')));
+    assert.ok(submit !== undefined, '找不到提交按钮');
+    submit.props.onClick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(submitted, [{ target: 'web' }], '空值不送、有值才送');
+    assert.equal(closed, true, '提交后面板要关闭');
+  });
+
   console.log(`\n${passed} checks passed${failed > 0 ? `, ${failed} FAILED` : ''}`);
   if (failed > 0) process.exitCode = 1;
 })();

@@ -11,12 +11,14 @@
  */
 import type {
   ApiError,
+  InputVariable,
   ProblemMatcher,
   ServerReadyAction,
   TaskEntry,
   TaskGroup,
   TaskOptions,
   TaskPresentation,
+  TaskRunOptions,
 } from './types.js';
 
 export type { ApiError, TaskEntry } from './types.js';
@@ -95,17 +97,32 @@ export function expandVariables(
   });
 }
 
-/** 默认 input 值：配置里写了 default 用它，否则取第一项。 */
-export function resolveInputs(
-  inputs: Array<{ id: string; options: string[]; default?: string }>,
+/**
+ * 一次运行的 input 取值表。
+ *
+ * 取值顺序：**现场给的 overrides 优先**（填值面板 / `inputValues`），其次 `default`
+ * （pickString 缺省取第一项），都没有 → 不进表——`${input:id}` 会留在文本里，
+ * 由 requiredInputs 向调用方声明"这条 entry 还缺这个值"。
+ */
+export function effectiveInputValues(
+  inputs: InputVariable[],
+  overrides: Record<string, string> = {},
 ): Record<string, string> {
-  const resolved: Record<string, string> = {};
+  const values: Record<string, string> = {};
   for (const input of inputs) {
-    const first = input.options[0];
-    const chosen = input.default ?? first;
-    if (chosen !== undefined) resolved[input.id] = chosen;
+    const given = overrides[input.id];
+    if (typeof given === 'string' && given.length > 0) {
+      values[input.id] = given;
+      continue;
+    }
+    if (input.type === 'pickString') {
+      const chosen = input.default ?? input.options?.[0];
+      if (chosen !== undefined) values[input.id] = chosen;
+    } else if (input.default !== undefined) {
+      values[input.id] = input.default;
+    }
   }
-  return resolved;
+  return values;
 }
 
 /* ─────────────────────────── 单条 entry 的收敛 ─────────────────────────── */
@@ -229,6 +246,18 @@ export function coerceEntry(raw: unknown): CoercedEntry | undefined {
   const group: TaskGroup =
     groupRaw === 'build' || groupRaw === 'test' || groupRaw === 'none' ? groupRaw : 'none';
 
+  const runOptionsRaw = raw['runOptions'];
+  let runOptions: TaskRunOptions | undefined;
+  if (runOptionsRaw !== undefined) {
+    if (!isRecord(runOptionsRaw)) {
+      warnings.push(`条目「${label}」的 runOptions 不是对象，已忽略`);
+    } else if (runOptionsRaw['runOn'] !== undefined && runOptionsRaw['runOn'] !== 'folderOpen') {
+      warnings.push(`条目「${label}」的 runOptions.runOn 只认 "folderOpen"，已忽略`);
+    } else {
+      runOptions = { runOn: 'folderOpen' };
+    }
+  }
+
   const entry: TaskEntry = {
     label,
     command,
@@ -241,6 +270,7 @@ export function coerceEntry(raw: unknown): CoercedEntry | undefined {
     ...(serverReadyAction !== undefined ? { serverReadyAction } : {}),
     ...(presentation !== undefined ? { presentation } : {}),
     ...(group !== 'none' ? { group } : {}),
+    ...(runOptions !== undefined ? { runOptions } : {}),
     ...(str(raw['onReady']) !== undefined ? { onReady: str(raw['onReady']) } : {}),
   };
   return { entry, warnings };

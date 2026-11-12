@@ -189,6 +189,11 @@ const ZH: Record<string, string> = {
   errorClose: '知道了',
   noFocus: '当前目录没有 .dsh/run-deck/run.json',
   noFocusHint: '在项目根目录放一份 .dsh/run-deck/run.json，就会出现这个工作区的启动按钮。',
+  inputsTitle: '这次运行要填值',
+  inputsHint:
+    '这条任务引用了没有默认值的 ${input:…}。填好的值只用于这一次运行；留空 = 用清单里的默认值。',
+  inputsSubmit: '填好，跑',
+  inputsCancel: '取消',
 };
 
 const EN: Record<string, string> = {
@@ -316,6 +321,11 @@ const EN: Record<string, string> = {
   errorClose: 'Got it',
   noFocus: 'No .dsh/run-deck/run.json in this directory',
   noFocusHint: 'Add one to the project root to get this workspace’s run buttons.',
+  inputsTitle: 'Values for this run',
+  inputsHint:
+    'This entry references ${input:…} without defaults. The values apply to this run only; leave a field empty to use the manifest default.',
+  inputsSubmit: 'Run with these values',
+  inputsCancel: 'Cancel',
 };
 
 /* ─────────────────────── 弹层高度 ─────────────────────── */
@@ -1269,15 +1279,24 @@ async function runEntry(
   projectRoot: string,
   entryId: string,
   sessionId: string | null,
+  inputValues?: Record<string, string>,
 ): Promise<ApiResult<unknown>> {
   return call<unknown>('/run', 'POST', {
     projectRoot,
     entryId,
     ...(sessionId !== null && sessionId.length > 0 ? { sessionId } : {}),
+    ...(inputValues !== undefined && Object.keys(inputValues).length > 0 ? { inputValues } : {}),
   });
 }
 async function stopRun(runId: string): Promise<ApiResult<unknown>> {
   return call<unknown>('/stop', 'POST', { runId });
+}
+
+/** 这条 entry 引用了没有默认值的 promptString 吗（点跑前要先弹填值面板）。 */
+function entryNeedsInputs(entries: ResolvedEntry[], entryId: string): boolean {
+  return entries.some(
+    (candidate) => candidate.id === entryId && (candidate.requiredInputs?.length ?? 0) > 0,
+  );
 }
 
 /**
@@ -1352,7 +1371,7 @@ interface BarProps {
   /** 钉住/拔钉某条条目的输出卡（悬浮卡头部的图钉按钮，条上没有第二颗钉钮）。 */
   onTogglePin(entry: string): void;
   onOpenOverflow(): void;
-  openPanel: 'none' | 'add' | 'manage' | 'edit' | 'settings' | 'error' | 'overflow';
+  openPanel: 'none' | 'add' | 'manage' | 'edit' | 'settings' | 'error' | 'overflow' | 'inputs';
   /** 「编辑」面板正在改哪条（旧 entry id）；只在 `openPanel === 'edit'` 时有意义。 */
   editingEntry: string | null;
   onClosePanel(): void;
@@ -1386,6 +1405,17 @@ interface BarProps {
   ): Promise<ApiResult<{ entry: string }>>;
   /** 最近一次跑/停的失败原因；非 null 时条上出现一个可点的告警标记。 */
   lastError: string | null;
+  /**
+   * 填值面板正在为哪条 entry 收集 `${input:…}` 的值（null = 没开着）。
+   * openPanel === 'inputs' 时面板用它找到 entry 并渲染字段。
+   */
+  inputPrompt: { projectRoot: string; entryId: string } | null;
+  /** 填值面板点了「跑」：带值起进程（成功/失败的提示走 lastError 那条路）。 */
+  onRunWithInputs(
+    projectRoot: string,
+    entryId: string,
+    values: Record<string, string>,
+  ): Promise<ApiResult<unknown>>;
 }
 
 /**
@@ -1489,6 +1519,16 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
   const shownEntry = pinnedEntry ?? hoverEntry;
 
   /**
+   * 填值面板的目标（openPanel === 'inputs' 时有值）。entry 在焦点条目里找——
+   * 按钮（含溢出菜单）本来就只来自焦点项目。
+   */
+  const inputPrompt = props.inputPrompt;
+  const promptEntry =
+    inputPrompt === null
+      ? undefined
+      : props.entries.find((candidate) => candidate.id === inputPrompt.entryId);
+
+  /**
    * **条永远在**：插件装上了就该一直有个入口。
    *
    * 早先"没有按钮就整条不画"，于是按钮全被收起（或项目还没有清单）时，`+` 也跟着
@@ -1567,6 +1607,18 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
           />
         </div>
       ) : null}
+      {openPanel === 'inputs' && inputPrompt !== null && promptEntry !== undefined ? (
+        <div className="__ru_pop">
+          <InputPromptPanel
+            entry={promptEntry}
+            runtime={runtime}
+            onRun={async (values) => {
+              await props.onRunWithInputs(inputPrompt.projectRoot, inputPrompt.entryId, values);
+            }}
+            onClosePanel={onClosePanel}
+          />
+        </div>
+      ) : null}
       {openPanel === 'overflow' && overflow.length > 0 ? (
         <div className="__ru_menu">
           {overflow.map((button) => {
@@ -1578,7 +1630,11 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                 className="__ru_menuItem"
                 onClick={() => {
                   if (runId !== undefined) void actions.onStop(runId);
-                  else void actions.onRun(button.projectRoot, button.entry);
+                  else if (entryNeedsInputs(props.entries, button.entry)) {
+                    // 不关面板：onRun 会把 overflow 换成填值面板（同步 setPanel 在它首个 await 前）
+                    void actions.onRun(button.projectRoot, button.entry);
+                    return;
+                  } else void actions.onRun(button.projectRoot, button.entry);
                   onClosePanel();
                 }}
               >
@@ -3041,6 +3097,89 @@ function ErrorPanel(props: {
 }
 
 /* ================================================================== *
+ * 填值面板（promptString）：点跑之前把 `${input:…}` 的值收齐
+ * ================================================================== */
+
+interface InputPromptProps {
+  entry: ResolvedEntry;
+  runtime: Runtime;
+  /** 点「跑」：带值发起本次运行（成功与否都走 lastError 那条提示路）。 */
+  onRun(values: Record<string, string>): Promise<void>;
+  onClosePanel(): void;
+}
+
+/**
+ * 这条 entry 引用了**没有默认值**的 promptString 时，点跑先到这里。
+ *
+ * 只收这一次运行的值（VS Code 的 promptString 语义：每次跑先问）。字段说明用
+ * `description`（VS Code 同名字段），没有就亮出 input 的 id。留空 = 用清单默认值
+ * ——host 的取值顺序是"现场值 ?? 默认值"，所以空串在这里等于"交给默认"。
+ */
+function InputPromptPanel(props: InputPromptProps): React.ReactElement {
+  const { entry, runtime } = props;
+  const required = entry.requiredInputs ?? [];
+  const [values, setValues] = React.useState<Record<string, string>>(() =>
+    Object.fromEntries(required.map((input) => [input.id, input.default ?? ''])),
+  );
+  const [busy, setBusy] = React.useState(false);
+
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      // 空值不送：等于"这次也不用现场值，走默认"。
+      const given = Object.fromEntries(
+        Object.entries(values).filter(([, value]) => value.trim().length > 0),
+      );
+      await props.onRun(given);
+      props.onClosePanel();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <h4 className="__ru_popTitle">{runtime.t('inputsTitle')}</h4>
+      <p className="__ru_popHint">{runtime.t('inputsHint')}</p>
+      {required.map((input) => (
+        <div className="__ru_field" key={input.id}>
+          <span className="__ru_fieldLabel">{input.description ?? input.id}</span>
+          <div className="__ru_fieldBody">
+            <input
+              className="__ru_input"
+              value={values[input.id] ?? ''}
+              placeholder={input.default !== undefined ? input.default : input.id}
+              onChange={(event) =>
+                setValues((current) => ({ ...current, [input.id]: event.target.value }))
+              }
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !busy) void submit();
+              }}
+            />
+          </div>
+          <p className="__ru_fieldHint" style={{ flexBasis: '100%' }}>
+            {'${input:' + input.id + '}'}
+          </p>
+        </div>
+      ))}
+      <div className="__ru_rowActions" style={{ justifyContent: 'flex-end' }}>
+        <button type="button" className="__ru_btn" onClick={props.onClosePanel} disabled={busy}>
+          {runtime.t('inputsCancel')}
+        </button>
+        <button
+          type="button"
+          className="__ru_btn __ru_btnActive"
+          onClick={() => void submit()}
+          disabled={busy}
+        >
+          {runtime.t('inputsSubmit')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== *
  * 颜色码翻译器（控制台上色那一小块）
  * ================================================================== */
 
@@ -3449,8 +3588,12 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
    */
   const [lastError, setLastError] = React.useState<string | null>(null);
   const [panel, setPanel] = React.useState<
-    'none' | 'add' | 'manage' | 'edit' | 'settings' | 'error' | 'overflow'
+    'none' | 'add' | 'manage' | 'edit' | 'settings' | 'error' | 'overflow' | 'inputs'
   >('none');
+  /** 填值面板正在为哪条 entry 收集 `${input:…}` 的值（null = 没开着）。 */
+  const [inputPrompt, setInputPrompt] = React.useState<{ projectRoot: string; entryId: string } | null>(
+    null,
+  );
   /** 「编辑」面板正在改哪条（旧 entry id）。 */
   const [editingEntry, setEditingEntry] = React.useState<string | null>(null);
   /** 输出悬浮卡钉在哪条 entry（null = 没钉；reveal:always 也会自动钉）。 */
@@ -3577,26 +3720,48 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
   const nextDensity = (): ButtonDensity =>
     cycle[(cycle.indexOf(density) + 1) % cycle.length] ?? 'full';
 
+  /**
+   * 真正发起一次运行（填值面板的「跑」也走这里，值随请求带给 host）。
+   * 失败原因必须说出来：早先这里把结果丢掉，"点了没反应"完全无从查起。
+   */
+  const doRun = async (
+    projectRoot: string,
+    entryId: string,
+    inputValues: Record<string, string> | undefined,
+  ): Promise<ApiResult<unknown>> => {
+    setBusy(entryId);
+    const result = await runEntry(projectRoot, entryId, sessionId ?? null, inputValues);
+    setBusy(null);
+    setLastError(result.ok ? null : `${result.message}${result.hint !== undefined ? `（${result.hint}）` : ''}`);
+    // `presentation.reveal: "always"`（VS Code 的原义：这条命令跑起来时把它的
+    // 输出亮出来）。run.json 里的承诺由界面兑现：跑起来那一刻**自动钉住**这条的
+    // 悬浮预览卡（小卡、一键拔钉；拔了就回到"悬停才出现"的规矩）。
+    // 记下这是自动钉：长驻进程结束后由轮询把它收走（autoPinnedRunEnded）。
+    if (result.ok) {
+      const entry = state.focusedEntries.find((candidate) => candidate.id === entryId);
+      if (entry?.presentation?.reveal === 'always') {
+        autoPinnedRef.current = true;
+        setPinnedEntry(entryId);
+      }
+    }
+    await pull();
+    return result;
+  };
+
   const actions: BarActions = {
     onRun: async (projectRoot, entryId) => {
-      setBusy(entryId);
-      const result = await runEntry(projectRoot, entryId, sessionId ?? null);
-      setBusy(null);
-      // 起不来时必须说出来：早先这里把结果丢掉，于是"点了没反应"完全无从查起。
-      setLastError(result.ok ? null : `${result.message}${result.hint !== undefined ? `（${result.hint}）` : ''}`);
-      // `presentation.reveal: "always"`（VS Code 的原义：这条命令跑起来时把它的
-      // 输出亮出来）。run.json 里的承诺由界面兑现：跑起来那一刻**自动钉住**这条的
-      // 悬浮预览卡（小卡、一键拔钉；拔了就回到"悬停才出现"的规矩）。
-      // 记下这是自动钉：长驻进程结束后由轮询把它收走（autoPinnedRunEnded）。
-      if (result.ok) {
-        const entry = state.focusedEntries.find((candidate) => candidate.id === entryId);
-        if (entry?.presentation?.reveal === 'always') {
-          autoPinnedRef.current = true;
-          setPinnedEntry(entryId);
-        }
+      /**
+       * promptString 分流：这条 entry 引用了没有默认值的 `${input:…}` → 先弹填值
+       * 面板，值收齐（onRunWithInputs）才真的跑。setPanel 必须在首个 await 之前
+       * ——溢出菜单的 onClick 在发起调用后立刻 onClosePanel()，同步换面板才不会被盖掉。
+       */
+      const entry = state.focusedEntries.find((candidate) => candidate.id === entryId);
+      if ((entry?.requiredInputs?.length ?? 0) > 0) {
+        setInputPrompt({ projectRoot, entryId });
+        setPanel('inputs');
+        return { ok: true };
       }
-      await pull();
-      return result;
+      return doRun(projectRoot, entryId, undefined);
     },
     onStop: async (runId) => {
       setBusy(runId);
@@ -3616,6 +3781,8 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       runtime={runtime}
       busy={busy}
       actions={actions}
+      inputPrompt={inputPrompt}
+      onRunWithInputs={async (projectRoot, entryId, values) => doRun(projectRoot, entryId, values)}
       openPanel={panel}
       editingEntry={editingEntry}
       onClosePanel={() => setPanel('none')}
@@ -3797,6 +3964,7 @@ export default Object.assign(plugin, {
     ErrorPanel,
     FloatingBar,
     FloatingBarHost,
+    InputPromptPanel,
     ManagePanel,
     POPUP_OFFSET,
     POPUP_SPACE_VAR,
@@ -3807,6 +3975,7 @@ export default Object.assign(plugin, {
     autoPinnedRunEnded,
     cwdOfSession,
     dropIndexFor,
+    entryNeedsInputs,
     iconGlyph,
     injectStyles,
     labelFor,

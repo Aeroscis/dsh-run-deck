@@ -184,6 +184,11 @@ export function apply(ctx: DshContext, config?: unknown): void {
         'info',
         `v${version} 已就绪：${projects.length} 个项目根目录、${entries} 个条目，配置来源 ${currentSource}`,
       );
+      // 宿主启动自动跑（runOptions.runOn: 'folderOpen'）。内部自带"等服务物化"
+      // 的重试，所以这里可以顺手发起、不等它：自动跑不该拦住插件就绪。
+      void manager.autoStartOnLaunch().catch((error) => {
+        log('warn', `启动自动跑失败：${messageOf(error)}`);
+      });
     } catch (error) {
       const message = `插件初始化失败：${messageOf(error)}`;
       manager.recordWarning(message);
@@ -211,6 +216,9 @@ export function apply(ctx: DshContext, config?: unknown): void {
       }),
     'dsh-run-deck: volatile config',
   );
+
+  // 卸载时叫停启动自动跑的重试循环（已起的进程由 subprocess 服务自己接管清理）。
+  ctx.effect(() => () => manager.dispose(), 'dsh-run-deck: autostart guard');
 
   /* ── /run-deck 命令 ── */
   ctx.inject(['commands'], (sctx) => {

@@ -17,14 +17,32 @@
 /** `type`：目前只实现 `shell`（VS Code 的 process 需要 argv 数组，本插件不做）。 */
 export type TaskType = 'shell';
 
-/** `${input:id}` 的取值来源。本插件实现 `pickString`（VS Code 同名单选）。 */
+/** `${input:id}` 的取值来源。实现 VS Code 同名的 `pickString` / `promptString` 两种。 */
 export interface InputVariable {
   id: string;
-  type: 'pickString';
-  /** 可选项。 */
-  options: string[];
-  /** 默认值；缺省 = 第一项。 */
+  type: 'pickString' | 'promptString';
+  /** `pickString` 的可选项（`promptString` 不用）。 */
+  options?: string[];
+  /**
+   * 默认值。`pickString` 缺省 = 第一项；`promptString` 缺省 = **不弹面板直接用它**
+   * （与 VS Code"总是先问、只是预填默认"不同，这里省掉那一次弹框；调用方仍可用
+   * `inputValues` 覆盖它）。没有 default 的 promptString 才要求现场填值。
+   */
   default?: string;
+  /** VS Code 同名字段：填值面板里给一行说明。 */
+  description?: string;
+}
+
+/** 这条 entry 的文本里引用了、且本次运行必须给出值的 promptString input。 */
+export interface RequiredInput {
+  id: string;
+  default?: string;
+  description?: string;
+}
+
+/** VS Code `runOptions`。目前只实现 `runOn: 'folderOpen'`（宿主启动后自动跑）。 */
+export interface TaskRunOptions {
+  runOn?: 'folderOpen';
 }
 
 /** `options.cwd` 等选项。VS Code 里 `cwd` 相对 workspaceFolder 解析。 */
@@ -91,6 +109,8 @@ export interface TaskEntry {
   serverReadyAction?: ServerReadyAction;
   presentation?: TaskPresentation;
   group?: TaskGroup;
+  /** VS Code `runOptions.runOn`：`folderOpen` = 宿主启动后自动跑（不等按钮）。 */
+  runOptions?: TaskRunOptions;
   /**
    * 增量 2：就绪后接另一个 entry 的 **id**（不接受命令）。
    * 补的是 VS Code issue #69311 里 serverReadyAction 表达不了的那件事。
@@ -151,6 +171,14 @@ export interface ResolvedEntry {
   serverReadyAction?: ServerReadyAction;
   presentation?: TaskPresentation;
   group: TaskGroup;
+  /** 展开后的 `runOptions.runOn`（缺省 = 不自动跑）。 */
+  runOn?: 'folderOpen';
+  /**
+   * 文本里引用了、且**没有默认值**的 promptString inputs（有默认值的不在这里——
+   * 它们不弹面板）。非空 = 点跑时界面要先弹填值面板；命令/工具调用则必须带
+   * `inputValues`，否则 startRun 拒绝执行。
+   */
+  requiredInputs?: RequiredInput[];
   onReady?: string;
   /**
    * 清单里**原样**的那一条（变量未展开、cwd 未解析成绝对路径）。
@@ -419,6 +447,12 @@ export interface StartRunRequest {
    * Agent 身份，所以空闲会话点按钮也能真跑起来。
    */
   sessionId?: string;
+  /**
+   * `${input:id}` 的**本次运行**取值（命令/工具调用端传；界面的填值面板也走这里）。
+   * 语义是"覆盖默认"：没给的 input 用它的 default（pickString 是 default ?? 第一项，
+   * promptString 是 default）；两者都没有、且这条 entry 引用了它 → 拒绝执行。
+   */
+  inputValues?: Record<string, string>;
 }
 
 /** 统一错误体（与 dsh-temptask 一致，便于两端复用习惯）。 */

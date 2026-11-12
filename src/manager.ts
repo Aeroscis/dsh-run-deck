@@ -19,6 +19,7 @@ import { detectTasks as detectProjectTasks } from './detect.js';
 import { insertTaskIntoManifestText, removeTaskFromManifestText, replaceTaskInManifestText, retargetButtonsInManifestText } from './manifest-edit.js';
 import { buildTaskEntry } from './newtask.js';
 import {
+  expandEntryForRun,
   LEGACY_MANIFEST_RELATIVE_PATH,
   loadProject,
   loadProjects,
@@ -137,6 +138,22 @@ const CATALOG_RETRY_MS = 5000;
 /** 每条 run 在 `RunRecord.tail` 里留几行输出（输出面板 / ⚙ 面板展示用）。 */
 const TAIL_LINES = 200;
 
+/**
+ * 启动自动跑等服务物化的重试节奏：每 3 秒试一次、最多 10 次（约 30 秒）。
+ * 启动那刻 `subprocess` / `workspaceRegistry` 常常还没在本 fiber 作用域里
+ * （README §1 的已知事实），等一会儿它们就来了；30 秒还不在说明真的没有。
+ */
+const AUTO_START_RETRY_MS = 3000;
+const AUTO_START_ATTEMPTS = 10;
+
+/** 等待但**不**挂着进程退出（unref）：自动跑是附加行为，不该拦着宿主退出。 */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+}
+
 /** 子树里是否有自报 id 等于 `sessionId` 的节点（含自己）。 */
 function subtreeHasId(value: unknown, sessionId: string, depth: number): boolean {
   if (depth > CWD_SCAN_MAX_DEPTH || value === null || typeof value !== 'object') return false;
@@ -227,6 +244,12 @@ export interface ManagerDeps {
   config: () => RunDeckConfig;
   configSource: () => ConfigSource;
   log: (level: 'info' | 'warn' | 'error', message: string) => void;
+  /**
+   * 启动自动跑的重试节奏（默认 AUTO_START_RETRY_MS × AUTO_START_ATTEMPTS）。
+   * 只有测试会改它——离线冒烟不能真等 30 秒。
+   */
+  autoStartRetryMs?: number;
+  autoStartAttempts?: number;
 }
 
 function failure(code: string, message: string, hint?: string): ApiError {
@@ -271,6 +294,12 @@ export class RunDeckManager {
   private layoutMtimeMs: number | undefined;
 
   private refreshing: Promise<RunProject[]> | undefined;
+
+  /** 启动自动跑只在每个宿主进程里做一次（不随 /state 重复触发）。 */
+  private launchAutoStarted = false;
+
+  /** 宿主卸载后叫停自动跑的重试循环。 */
+  private disposed = false;
 
   /**
    * 清单写入的串行锁：按清单路径排队 Promise 链。
@@ -335,6 +364,74 @@ export class RunDeckManager {
       this.layoutMtimeMs = undefined;
     }
     await this.refresh();
+  }
+
+  /**
+   * 宿主启动自动跑（`runOptions.runOn: 'folderOpen'` 的等价时机：宿主进程起来）。
+   *
+   * 与 VS Code folderOpen 的差别：那边有"你打开了哪个文件夹"这个锚点，这边启动时
+   * 没有焦点项目，所以扫**全部已知项目**里声明了 folderOpen 的条目。
+   *
+   * 启动那刻 `subprocess` / 工作区注册表可能还没物化（README §1 的已知事实），
+   * 所以用重试：每 3 秒试一次、最多 10 次（约 30 秒）。执行缝一直不在 → 放弃并
+   * 留一行日志；只要起过一次就不再重复（`launchAutoStarted` 一道闸）。
+   *
+   * 引用了无默认值 promptString 的条目**不自动跑**（自动跑给不了交互），跳过并说明。
+   */
+  async autoStartOnLaunch(): Promise<void> {
+    if (this.launchAutoStarted || this.disposed) return;
+    this.launchAutoStarted = true;
+    const attempts = this.deps.autoStartAttempts ?? AUTO_START_ATTEMPTS;
+    const retryMs = this.deps.autoStartRetryMs ?? AUTO_START_RETRY_MS;
+    for (let attempt = 1; attempt <= attempts && !this.disposed; attempt += 1) {
+      if (await this.tryAutoStartOnce()) return;
+      // 最后一轮不再等：多睡一次只会让"放弃"的结论迟到，没有任何收益。
+      if (attempt < attempts) await delay(retryMs);
+    }
+    this.deps.log(
+      'warn',
+      `启动自动跑放弃：等了约 ${Math.round((attempts * retryMs) / 1000)} 秒执行缝（subprocess）仍不可用；` +
+        '下次重启 DSH 再试，或先用按钮手动跑。',
+    );
+  }
+
+  /** 试一轮自动跑。返回 false = "执行缝还没就绪，等下一轮"，而不是失败。 */
+  private async tryAutoStartOnce(): Promise<boolean> {
+    const probe = probeSubprocess(this.deps.ctx);
+    if (!probe.available) return false;
+    await this.refresh();
+    const pending = this.projects.flatMap((project) =>
+      project.entries
+        .filter((candidate) => candidate.runOn === 'folderOpen')
+        .map((candidate) => ({ project, entry: candidate })),
+    );
+    if (pending.length === 0) {
+      this.deps.log('info', '启动自动跑：没有任何条目声明 runOn: "folderOpen"，无事可做');
+      return true;
+    }
+    for (const { project, entry } of pending) {
+      if ((entry.requiredInputs?.length ?? 0) > 0) {
+        this.deps.log(
+          'warn',
+          `启动自动跑跳过「${project.name} · ${entry.label}」：它引用了没有默认值的 promptString，自动跑给不了现场填值`,
+        );
+        continue;
+      }
+      const result = await this.startRun({ projectRoot: project.root, entryId: entry.id });
+      if (result.ok) {
+        this.deps.log('info', `启动自动跑：${project.name} · ${entry.label}（runOn: folderOpen）`);
+      } else if (result.code === ERROR_CODES.busy) {
+        this.deps.log('info', `启动自动跑：「${entry.label}」已在跑，不重复开`);
+      } else {
+        this.deps.log('warn', `启动自动跑失败：${project.name} · ${entry.label} → ${result.message}`);
+      }
+    }
+    return true;
+  }
+
+  /** 宿主卸载时叫停重试循环（已起的进程由 subprocess 服务自己接管清理）。 */
+  dispose(): void {
+    this.disposed = true;
   }
 
   /**
@@ -705,6 +802,39 @@ export class RunDeckManager {
       );
     }
 
+    /**
+     * promptString 的门槛：这条 entry 引用的、**没有默认值**的 input 必须在这次
+     * 请求里给出（界面的填值面板 / 命令与工具的 `inputValues`）。缺了就拒绝——
+     * 把 `${input:x}` 原样塞给 shell 只会跑出一句 "找不到文件" 的错。
+     */
+    const missing = (entry.requiredInputs ?? []).filter(
+      (input) => (request.inputValues?.[input.id] ?? '').trim().length === 0,
+    );
+    if (missing.length > 0) {
+      const ids = missing.map((input) => input.id).join(', ');
+      return failure(
+        ERROR_CODES.badRequest,
+        `「${entry.label}」需要现场填值：${ids}`,
+        '界面上点它会先弹填值面板；命令行 / run-deck 工具调用请在 inputValues 里带 { "<id>": "<值>" }。',
+      );
+    }
+
+    /**
+     * 一次运行前的重展开：清单加载时只展开默认值；现场给了 inputValues（或这条
+     * 还挂着 requiredInputs）就从 `raw` 重解析一遍，命令/参数/cwd 才是**这一次**
+     * 真正要跑的形态。没有任何 input 参与时就是加载时的那条，不重算。
+     */
+    let runEntry = entry;
+    if ((entry.requiredInputs?.length ?? 0) > 0 || (request.inputValues !== undefined && Object.keys(request.inputValues).length > 0)) {
+      const project = this.projects.find((candidate) => candidate.root === request.projectRoot);
+      if (project !== undefined && entry.raw !== undefined) {
+        runEntry = {
+          ...expandEntryForRun(project.root, entry.raw, project.document?.inputs ?? [], request.inputValues ?? {}),
+          id: entry.id,
+        };
+      }
+    }
+
     // 同一条目重复跑：提示而不是静默开第二个——长驻服务（isBackground）尤其如此。
     const existing = [...this.runs.values()].find(
       (run) =>
@@ -727,10 +857,10 @@ export class RunDeckManager {
       return failure(route.code, route.message, route.hint);
     }
 
-    const commandLine = renderCommandLine(entry);
+    const commandLine = renderCommandLine(runEntry);
     let handle: DshSubprocessTerminalHandle;
     try {
-      handle = await spawnRunTerminal(route.route, entry, commandLine, request.sessionId);
+      handle = await spawnRunTerminal(route.route, runEntry, commandLine, request.sessionId);
     } catch (error) {
       const message = `起终端失败：${messageOf(error)}`;
       this.recordWarning(message);
@@ -1344,6 +1474,19 @@ export class RunDeckManager {
       });
       if (!built.ok) return built;
       const task = built.task;
+      // 表单没有的字段别在编辑时悄悄丢掉：`runOptions`（要不要宿主启动自动跑）与
+      // `problemMatcher.background` 的 beginsPattern / activeOnStart（就绪判定的门控）
+      // 都是手写在清单里的行为，界面上没有对应输入框。只要本次提交没有明确改写它们
+      // （表单提交里 runOptions 永远缺席；endsPattern 与原值相同 = 正则没动），
+      // 就沿用被编辑那条的原值——否则"在界面里改个名字"会把 folderOpen 摘掉。
+      if (task.runOptions === undefined && editing.raw?.runOptions !== undefined) {
+        task.runOptions = editing.raw.runOptions;
+      }
+      const oldBackground = editing.raw?.problemMatcher?.background;
+      const newBackground = task.problemMatcher?.background;
+      if (oldBackground !== undefined && newBackground !== undefined && newBackground.endsPattern === oldBackground.endsPattern) {
+        task.problemMatcher = { background: { ...oldBackground, endsPattern: newBackground.endsPattern } };
+      }
       const newId = built.entryId;
 
       let text: string;

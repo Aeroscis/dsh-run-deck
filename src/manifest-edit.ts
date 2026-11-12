@@ -280,6 +280,9 @@ function renderTask(task: TaskEntry, indent: string): string {
   if (task.group !== undefined && task.group !== 'none') {
     fields.push(`"group": ${JSON.stringify(task.group)}`);
   }
+  if (task.runOptions !== undefined) {
+    fields.push(`"runOptions": ${JSON.stringify(task.runOptions)}`);
+  }
   if (task.onReady !== undefined) fields.push(`"onReady": ${JSON.stringify(task.onReady)}`);
 
   // 只有 label/id/command/args 的条目仍然是一行——与手写的简版条目一致。
