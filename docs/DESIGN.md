@@ -319,6 +319,23 @@ compat 探针的已知盲点：它按 `node_modules/@deepseek-ai/<pkg>/lib/*.js`
 `npm publish`（`prepack` 会现场构建）→ 打 annotated tag `v<version>` 并推送。
 发布前用 `npm view @aeroscis/dsh-run-deck@<version> version` 确认 registry 上没有该版本。
 
+### 持续集成
+
+`.github/workflows/` 下有两个 workflow：
+
+| 文件 | 触发 | 做什么 |
+| --- | --- | --- |
+| `check.yml` | push 到 main、pull request | `npm ci` + `npm run check`，全部离线 |
+| `publish.yml` | push `v*` 标签、手动触发 | 核对标签与 `package.json` 版本一致 → `npm run check` → `npm stage publish` |
+
+`publish.yml` 用 OIDC 受信任发布（`id-token: write`），**只把版本送进 stage 队列**，
+真正上线要维护者用 2FA 批准（`npm stage approve <stage-id>`，或在 npm 网页上点）。
+受信任发布者要在 npmjs.com 上配置一次：包 → Settings → Trusted publishers → GitHub Actions，
+仓库 `Aeroscis/dsh-run-deck`、workflow 文件名 `publish.yml`。没配这一步，送审会失败。
+
+`npm publish` 走的是另一条路：它是立即发布，同样要 2FA 一次性密码。账号开着 2FA 时
+它会在浏览器里要求认证；`npm stage publish` 则把认证推到批准那一步，适合交给 CI 送审。
+
 ## 13. 复用的探针
 
 `_probe/run/` 下可直接复用（本地 scratch，**不进仓库、不进 npm 包**）：

@@ -1,0 +1,25 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # 装依赖后 prepare 会自动构建（scripts/prepare.mjs：没有 typescript 就跳过）。
+      - run: npm ci
+
+      # typecheck + build + 发布形态自检 + 宿主冒烟 + 客户端冒烟 + 挂载契约 + 兼容判定规则。
+      # 全部离线：不访问 registry、不访问网络。
+      - run: npm run check
