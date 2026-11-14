@@ -81,6 +81,23 @@ check('发布物包含源码与构建脚本（别人要能复核、能重建）'
   }
 });
 
+check('README 里链接的本地文档都在发布物里', () => {
+  // 少写一条 files，装到你插件的人点 README 里的链接会 404——源码目录里看不出来。
+  const readme = readFileSync(join(root, 'README.md'), 'utf8');
+  // 只取 Markdown 链接的本地目标：排除 http(s)、锚点、包内协议。
+  const targets = [...readme.matchAll(/\]\(([^)\s]+)\)/gu)]
+    .map((match) => match[1])
+    .filter((target) => !/^(https?:|mailto:|#)/u.test(target))
+    .map((target) => target.split('#')[0])
+    .filter((target) => target !== '');
+  assert.ok(targets.length > 0, 'README 里没有本地链接，这条检查失去意义');
+  for (const target of targets) {
+    const rel = target.replace(/^\.\//u, '');
+    assert.ok(existsSync(join(root, rel)), `README 链接的目标不存在：${rel}`);
+    assert.ok(covered(rel), `README 链接的目标没有被 files 覆盖，装包后会缺失：${rel}`);
+  }
+});
+
 check('插件清单（dsh 字段）完整：bundle patch + client platform', () => {
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
   assert.equal(pkg.dsh?.client?.platform, 'web');

@@ -15,10 +15,13 @@
     "client",
     "src",
     "scripts",
+    "docs/DESIGN.md",
+    "docs/blocker-findings.md",
     "cordis.patch.yml",
     "tsconfig.json",
     "tsconfig.client.json",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [
