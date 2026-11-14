@@ -336,6 +336,13 @@ compat 探针的已知盲点：它按 `node_modules/@deepseek-ai/<pkg>/lib/*.js`
 `npm publish` 走的是另一条路：它是立即发布，同样要 2FA 一次性密码。账号开着 2FA 时
 它会在浏览器里要求认证；`npm stage publish` 则把认证推到批准那一步，适合交给 CI 送审。
 
+**`setup-node` 不能带 `registry-url`**。带了它会生成一份 `.npmrc`，内容是
+`//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`；仓库没有这个变量时 npm 把它展开成空串，
+于是先拿空 token 去认证并报 `E401`，**轮不到 OIDC**。实测过一次：
+`dsh-temptask` 的首次送审就是这样失败的，去掉 `registry-url` 后同一次运行链路即通过。
+`publish.yml` 里另加了一步自检：`ACTIONS_ID_TOKEN_REQUEST_URL` 为空就失败（说明 job 少了
+`id-token: write`），仓库里若残留带 `_authToken` 的 `.npmrc` 会先删掉那一行。
+
 ## 13. 复用的探针
 
 `_probe/run/` 下可直接复用（本地 scratch，**不进仓库、不进 npm 包**）：
