@@ -1,6 +1,6 @@
 {
   "name": "@aeroscis/dsh-run-deck",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH Run Configuration：按项目根目录 .dsh/run-deck/run.json 里声明的条目跑/停/重跑，附可钉住的浮动按钮。Vocabulary 照抄 VS Code tasks.json。",
   "type": "module",
   "main": "lib/index.js",
@@ -44,7 +44,7 @@
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": "^0.1.5-rc.2 || ^0.2.0-rc.1"
+    "dsh": "^0.2.1-0 || ^0.2.2-0"
   },
   "scripts": {
     "build": "npm run build:host && npm run build:client",
@@ -71,9 +71,9 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": "^0.1.5-rc.2 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh": "^0.2.1-0 || ^0.2.2-0",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@deepseek-ai/dsh-settings": "^0.1.5-rc.2 || ^0.2.0-rc.1"
+    "@deepseek-ai/dsh-settings": "^0.2.1-0 || ^0.2.2-0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-settings": {

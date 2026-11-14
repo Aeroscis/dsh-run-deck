@@ -48,16 +48,19 @@ desktop 是 Electron 保留名，npm CLI 会拒绝针对它的插件管理请求
 ### 支持的 DSH 版本
 
 - **声明**：`engines.dsh` 与 `peerDependencies` 里的 `@deepseek-ai/dsh` 都是
-  `^0.1.5-rc.2 || ^0.2.0-rc.1`。市场判定读的就是这个范围（「范围是否满足」，不是「版本相等」）；
+  `^0.2.1-0 || ^0.2.2-0`，覆盖整个 0.2.x（含尚未发布的次版本），到 `0.3.0-rc.1` 为止。
+  市场判定读的就是这个范围（「范围是否满足」，不是「版本相等」）；
   插件的版本号是它自己的迭代序号，与 DSH 版本无关。
+  宿主判定时开着 `includePrerelease`，所以 `^0.2.1-0` 覆盖 `0.2.2-rc.3`；
+  0.3.x 跨大版本，要人工验证后再放宽。
 - **依赖的宿主能力**（缺失时逐项降级，**任何一种缺失都不会让插件加载失败**）：
   `webServer` / `commands`；执行侧需要 **`subprocess`**（`@deepseek-ai/dsh-subprocess-local`，
   `dsh-base` 必挂）的 `spawnTerminal`——没有它时浮动条照常显示，
   ⚙ 面板里会明确说「起不了进程」，而不是让用户点了没反应。
   ⚠️ **不是** `ctx.terminals`：那是 `@deepseek-ai/dsh-terminal` 的 PTY 注册表，
   只在 `dsh-sdk-minimal` 那类组合里挂载，桌面版（`dsh-base` + `dsh-web-app`）里没有它。
-  配置侧在 0.1.x 用 `settings` 命名空间、在 0.2.0-rc.1 起用 `configEditor`
-  （两者都没有时退回 `<dataDir>/config.json`）。
+  配置侧用 0.2.0-rc.1 起引入的 `configEditor`（代码里仍保留了 0.1.x 的 `settings`
+  命名空间分支和 `<dataDir>/config.json` 兜底，但那两条线已不在声明范围内）。
 - **自查**：⚙ 面板底部显示两半版本（`插件后端 v…` / `插件界面 v…`）。
   host half 只在 DSH 启动时加载（改插件要重启）， client half 刷新页面即更新；
   两半不一致说明有一半是旧的。
