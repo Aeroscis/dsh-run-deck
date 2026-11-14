@@ -403,9 +403,14 @@ await check('需求给的完整样例能读能解析', () => {
   };
   const { document: coerced, warnings } = coerceDocument(document);
   assert.deepEqual(warnings, []);
-  const entries = resolveEntries('D:/jin', coerced);
+  // 项目根要用真实存在的绝对路径：'D:/jin' 在 POSIX 上不是绝对路径，
+  // resolve 之后会变成 $PWD/D:/jin，断言只在 Windows 上碰巧成立。
+  const root = mkdtempSync(join(tmpdir(), 'run-deck-sample-'));
+  const entries = resolveEntries(root, coerced);
+  // resolveEntries 把路径统一成正斜杠，比较前也要归一化，否则 Windows 上必然不等。
+  const slashes = (value) => String(value).replace(/\\/g, '/');
   assert.equal(entries[0]?.id, 'jin/web');
-  assert.equal(entries[0]?.cwd, 'D:/jin');
+  assert.equal(slashes(entries[0]?.cwd), slashes(root));
   assert.deepEqual(entries[0]?.args, ['start_gallery_web.py', '--mode', 'web']);
 });
 
