@@ -22,4 +22,19 @@ jobs:
 
       # typecheck + build + 发布形态自检 + 宿主冒烟 + 客户端冒烟 + 挂载契约 + 兼容判定规则。
       # 全部离线：不访问 registry、不访问网络。
-      - run: npm run check
+      #
+      # 失败时把关键行写成 annotation：Actions 的完整日志要登录才能看，
+      # annotation 是公开可读的，排查时不必先要一份日志。
+      - name: 检查
+        run: |
+          set +e
+          output=$(npm run check 2>&1)
+          status=$?
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            summary=$(printf '%s\n' "$output" \
+              | grep -E 'AssertionError|Error:|error TS|✗|not ok|FAIL' \
+              | head -n 6 | tr '\n' ' ' | cut -c1-900)
+            echo "::error title=check 失败::${summary:-未匹配到关键行，见作业日志}"
+          fi
+          exit $status
