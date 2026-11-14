@@ -1,7 +1,7 @@
 {
   "$comment": "本文件由 node scripts/compat-probe.mjs --write-baseline 生成，记录确认可用的宿主版本与接口表面，供后续升级比对。",
-  "runtime": "0.2.2-rc.1",
-  "recordedAt": "2026-11-09T16:44:18.493Z",
+  "runtime": "0.2.2-rc.3",
+  "recordedAt": "2026-11-14T03:10:17.048Z",
   "surface": {
     "hostServices": {
       "webServer": {
@@ -47,22 +47,22 @@
     "packages": {
       "@deepseek-ai/dsh-tools": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-host-webserver": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-subprocess": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-client-ui-conversation": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       }
     }
