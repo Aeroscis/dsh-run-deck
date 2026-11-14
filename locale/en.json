@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Run deck",
+    "description": "Runs and stops the launch scripts a project declares in .dsh/run-deck/run.json, from a floating row above the message composer. Click a button to run the entry, click it again to stop. + creates an entry by reading the project's package.json scripts, ☰ reorders, pins, edits and deletes entries, ⚙ shows each run's recent output and diagnostics. Commands come only from the manifest: no interface accepts a free-form command. Not supported: action sequences (dependsOn), the process task type, and keyboard shortcuts."
+  }
+}

@@ -4,6 +4,28 @@
 
 发布渠道：npm [`@aeroscis/dsh-run-deck`](https://www.npmjs.com/package/@aeroscis/dsh-run-deck) · 源码 <https://github.com/Aeroscis/dsh-run-deck>
 
+## [0.1.2] - 2026-11-15
+
+### 新增
+
+- **插件市场展示元数据**：`locale/en.json` 与 `locale/zh.json` 提供 `meta.title` 与
+  `meta.description`，`icon.svg` 提供图标；`exports` 增加 `./locale/*.json` 与 `./icon`，
+  `files` 一并收录。装好后插件详情页显示「运行配置 / Run deck」，而不是退回包名与默认图案。
+- **CI**：`check.yml`（push 到 main 与 PR 跑 `npm ci` + `npm run check`）与
+  `publish.yml`（推 `v*` 标签核对版本、跑检查后 `npm stage publish` 送审）。
+
+### 修复
+
+- `publish.yml` 不再给 `setup-node` 传 `registry-url`：它会生成带
+  `_authToken=${NODE_AUTH_TOKEN}` 的 `.npmrc`，仓库没有该变量时 npm 先拿空 token 认证并报
+  `E401`，轮不到 OIDC 受信任发布。另加一步自检：OIDC 请求地址缺失时直接失败。
+
+### 说明
+
+- 本版没有运行时改动：插件行为与 0.1.1 相同，变的是市场元数据与发布流程。
+- `check-pack` 增加一条校验：locale 的标题/描述、图标的大小与内容、以及 `meta.detail`
+  声明的文件必须真实存在，避免装出来的详情页缺图或退回包名。
+
 ## [0.1.1] - 2026-11-14
 
 首个发布版本。

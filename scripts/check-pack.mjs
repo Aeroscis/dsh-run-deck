@@ -22,12 +22,15 @@ function check(label, fn) {
   console.log(`  ✓ ${label}`);
 }
 
-/** 某个相对路径是否被 `files` 里的某一条覆盖（条目是文件/目录名）。 */
+/** 某个相对路径是否被 `files` 里的某一条覆盖（条目可以是文件、目录或带 `*` 的通配）。 */
 function covered(relPath) {
   const entries = Array.isArray(pkg.files) ? pkg.files : [];
   return entries.some((entry) => {
     const clean = String(entry).replace(/^\.\//u, '').replace(/\/+$/u, '');
-    return relPath === clean || relPath.startsWith(`${clean}/`);
+    if (!clean.includes('*')) return relPath === clean || relPath.startsWith(`${clean}/`);
+    // 通配按 files 的语义处理：`*` 不跨目录分隔符，例如 locale/*.json 覆盖 locale/en.json
+    const pattern = new RegExp(`^${clean.replace(/[.+^${}()|[\]\\]/gu, '\\$&').replace(/\*/gu, '[^/]*')}$`, 'u');
+    return pattern.test(relPath);
   });
 }
 
@@ -96,6 +99,45 @@ check('README 里链接的本地文档都在发布物里', () => {
     assert.ok(existsSync(join(root, rel)), `README 链接的目标不存在：${rel}`);
     assert.ok(covered(rel), `README 链接的目标没有被 files 覆盖，装包后会缺失：${rel}`);
   }
+});
+
+check('市场展示元数据齐备：locale 标题/描述 + 图标', () => {
+  // Plugin Manager 与市场读的是 locale 里的 meta.title / meta.description 与 ./icon 导出；
+  // 缺一个就退回 package.json 的 name/description 与默认图案，列表里认不出这是什么。
+  const text = (rel) => {
+    assert.ok(existsSync(join(root, rel)), `缺少 ${rel}`);
+    assert.ok(covered(rel), `${rel} 未被 files 覆盖，装包后会缺失`);
+    return readFileSync(join(root, rel), 'utf8');
+  };
+
+  assert.equal(pkg.exports?.['./icon'], './icon.svg', 'exports 缺少 "./icon"');
+  assert.ok(
+    pkg.exports?.['./locale/*.json'] !== undefined,
+    'exports 缺少 "./locale/*.json"',
+  );
+
+  for (const lang of ['en', 'zh']) {
+    const source = text(`locale/${lang}.json`);
+    let meta
+    try {
+      meta = JSON.parse(source).meta
+    } catch (error) {
+      assert.fail(`locale/${lang}.json 不是合法 JSON：${error.message}`);
+    }
+    assert.ok(typeof meta?.title === 'string' && meta.title.trim() !== '', `locale/${lang}.json 缺少 meta.title`);
+    assert.ok(
+      typeof meta?.description === 'string' && meta.description.trim().length >= 40,
+      `locale/${lang}.json 的 meta.description 太短，说明不了能力与用法`,
+    );
+    // 声明了 detail 就必须真的存在，否则详情区会显示错误与「重试」，而不是退回 README。
+    if (meta.detail !== undefined) text(meta.detail);
+  }
+
+  const icon = text('icon.svg');
+  const iconBytes = Buffer.byteLength(icon, 'utf8');
+  assert.ok(iconBytes <= 256 * 1024, `icon.svg 超过 256 KiB（${iconBytes} 字节）`);
+  assert.ok(icon.includes('<svg'), 'icon.svg 不是 SVG');
+  assert.ok(!/<text|<image|foreignObject|<style|<script/u.test(icon), 'icon.svg 里不许有文字、外链图片、样式或脚本');
 });
 
 check('插件清单（dsh 字段）完整：bundle patch + client platform', () => {
