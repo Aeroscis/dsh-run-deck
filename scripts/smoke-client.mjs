@@ -311,7 +311,9 @@ await (async () => {
       runtime,
       busy: null,
       actions: { onRun: async () => ({ ok: true }), onStop: async () => ({ ok: true }) },
-      onCycleDensity: () => {},
+      onSetDensity: () => {},
+      outputFont: x.OUTPUT_FONT_DEFAULT,
+      onOutputFont: () => {},
       onOpenAdd: () => {},
       onOpenManage: () => {},
       onOpenEdit: () => {},
@@ -434,7 +436,7 @@ await (async () => {
     }
   });
 
-  await check('输出悬浮卡：样式卡上、文案中英各一份（含图钉那一对）', () => {
+  await check('输出悬浮卡：样式卡上、文案中英各一份（含图钉那一对与字号那组）', () => {
     const css = String(x.CSS ?? '');
     assert.ok(css.includes('.__ru_outView'), 'CSS 缺 .__ru_outView');
     assert.ok(css.includes('.__ru_hover'), 'CSS 缺 .__ru_hover');
@@ -443,6 +445,37 @@ await (async () => {
       assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
       assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
     }
+
+    // ── 字号那组钮：样式与文案都在，而且字号/尺寸真的走变量 ──
+    for (const cls of ['__ru_fontBox', '__ru_fontBtn', '__ru_fontValue']) {
+      assert.ok(css.includes(`.${cls}`), `CSS 缺 .${cls}（字号钮画不出来）`);
+    }
+    for (const key of ['outputFontGroup', 'outputFontSmaller', 'outputFontLarger', 'outputFontReset']) {
+      assert.ok(Object.keys(x.ZH).includes(key), `ZH 缺 ${key}`);
+      assert.ok(Object.keys(x.EN).includes(key), `EN 缺 ${key}`);
+    }
+    // 输出区字号吃变量（写死 11px 的话调字号就是白调）
+    assert.ok(
+      css.includes(`font-size:var(${x.OUTPUT_FONT_VAR},`),
+      '.__ru_outView 的字号没走 --ru-out-font',
+    );
+    assert.ok(
+      css.includes(`line-height:calc(var(${x.OUTPUT_FONT_VAR},`),
+      '.__ru_outView 的行高没跟着字号算（大字号下会挤成一片）',
+    );
+    // 卡尺寸跟着缩放：字大了窗口也得变大，否则只是可见行数变少
+    const hoverRule = /\.__ru_hover\{[^}]*\}/u.exec(css)?.[0] ?? '';
+    assert.match(hoverRule, /width:min\(calc\(560px \* var\(--ru-out-scale/u, '卡的宽度没跟字号缩放');
+    assert.match(
+      hoverRule,
+      /max-height:min\(46vh,calc\(250px \* var\(--ru-out-scale/u,
+      '卡的高度没跟字号缩放',
+    );
+    // 变量名只在一处定义：JS 写属性、CSS 读属性，两边不能各写一份字面量
+    assert.equal(x.OUTPUT_FONT_VAR, '--ru-out-font');
+    assert.equal(x.OUTPUT_CARD_SCALE_VAR, '--ru-out-scale');
+    assert.equal(x.OUTPUT_CARD_BASE_WIDTH, 560);
+    assert.equal(x.OUTPUT_CARD_BASE_HEIGHT, 250);
   });
 
   /* ── 交互级：管理面板的删除二次确认 ── */
@@ -455,7 +488,9 @@ await (async () => {
     runtime: { t: zh },
     busy: null,
     actions: { onRun: async () => ({ ok: true }), onStop: async () => ({ ok: true }) },
-    onCycleDensity: () => {},
+    onSetDensity: () => {},
+    outputFont: x.OUTPUT_FONT_DEFAULT,
+    onOutputFont: () => {},
     onOpenAdd: () => {},
     onOpenManage: () => {},
     onOpenEdit: () => {},
@@ -776,7 +811,13 @@ await (async () => {
       onPreviewLeave: leave,
     });
     assert.equal(unPinned.tree.props.className, '__ru_pop __ru_hover', '未钉时不该有品牌色描边的类');
-    const unPinBtn = unPinned.buttonsIn(unPinned.tree)[0];
+    // 卡头除了图钉还有字号钮，按类名取，不按"第几颗按钮"取。
+    const pinButtonIn = (mounted) =>
+      mounted.inTree(mounted.tree, (node) =>
+        typeof node.props?.className === 'string' &&
+        node.props.className.split(/\s+/u).includes('__ru_pinBtn'),
+      )[0];
+    const unPinBtn = pinButtonIn(unPinned);
     assert.ok(unPinBtn, '头部有一个图钉按钮');
     assert.equal(unPinBtn.props['aria-pressed'], false);
     assert.equal(unPinBtn.props.title, x.ZH.pin);
@@ -808,7 +849,7 @@ await (async () => {
       '__ru_pop __ru_hover __ru_hoverPinned',
       '已钉卡的品牌色描边类要挂上',
     );
-    const pinBtn = pinned.buttonsIn(pinned.tree)[0];
+    const pinBtn = pinButtonIn(pinned);
     assert.equal(pinBtn.props['aria-pressed'], true);
     assert.equal(pinBtn.props.title, x.ZH.unpin);
     assert.ok(pinned.buttonText(pinBtn).includes(x.ZH.pinStateOn), '按下去的钉要写"已钉住"');
@@ -828,6 +869,108 @@ await (async () => {
       empty.buttonText(emptyPre).includes(x.ZH.settingsNoRuns),
       `没有 run 要显示空态说明（实际：${empty.buttonText(emptyPre)}）`,
     );
+  });
+
+  await check('输出卡字号钮：A− / 当前档位 / A+ 三颗，±1 档回调、到头变灰、点数字回默认', () => {
+    const run = {
+      runId: 'r1',
+      entryId: 'piscellum/launch',
+      projectRoot: 'D:/p',
+      label: '启动 Piscellum',
+      status: 'running',
+      tail: ['ready'],
+    };
+    const calls = [];
+    const push = (next) => calls.push(next);
+    const common = {
+      run,
+      runtime: { t: zh },
+      pinned: true,
+      left: 12,
+      onTogglePin: () => {},
+      onPreviewEnter: () => {},
+      onPreviewLeave: () => {},
+    };
+
+    // 卡本身：字号写进根节点的自定义属性，并把字号钮（带当前档位与回调）挂上卡头。
+    // 离线自测的假 React 不渲染子组件，所以这里验"挂上了什么"，钮的行为在下面单独挂 stepper 验。
+    const card = mountInteractions('RunPreviewCard', { ...common, font: 12, onFont: push });
+    const stepperEl = card.inTree(card.tree, (node) => node.type === card.internals.OutputFontStepper)[0];
+    assert.ok(stepperEl, '卡头没挂字号钮');
+    assert.equal(stepperEl.props.font, 12, '卡没把当前字号交给字号钮');
+    assert.equal(stepperEl.props.onFont, push, '卡没把改字号的回调交给字号钮');
+    // 字号写进卡根节点的自定义属性：输出区与卡尺寸都从这两个变量算（见 CSS 那条）。
+    assert.equal(card.tree.props.style[x.OUTPUT_FONT_VAR], '12px', '卡根节点没写字号变量');
+    assert.equal(
+      card.tree.props.style[x.OUTPUT_CARD_SCALE_VAR],
+      String(12 / x.OUTPUT_FONT_DEFAULT),
+      '卡根节点没写缩放比（窗口不会跟着字号变大）',
+    );
+
+    /** 钮本体：按类名找（中间那颗的子节点是数字，不是字符串，按文字找不到）。 */
+    const byClass = (mounted, name) =>
+      mounted.inTree(mounted.tree, (node) =>
+        typeof node.props?.className === 'string' &&
+        node.props.className.split(/\s+/u).includes(name),
+      )[0];
+    /** 按按钮上的字找（A− / A+），不依赖树里的先后顺序。 */
+    const byText = (mounted, text) =>
+      mounted.buttonsIn(mounted.tree).find((node) => mounted.buttonText(node) === text);
+    const stepperAt = (font) =>
+      mountInteractions('OutputFontStepper', { font, runtime: { t: zh }, onFont: push });
+
+    const mid = stepperAt(12);
+    const minus = byText(mid, 'A−');
+    const value = byClass(mid, '__ru_fontValue');
+    const plus = byText(mid, 'A+');
+    assert.ok(minus && value && plus, '字号钮要同时有 A− / 当前字号 / A+ 三颗');
+    assert.equal(value.children[0], 12, '中间那颗要显示当前字号');
+    minus.props.onClick();
+    plus.props.onClick();
+    value.props.onClick();
+    assert.deepEqual(calls, [11, 13, x.OUTPUT_FONT_DEFAULT], '− / + 各 ±1 档，点数字那格回默认档');
+
+    // 到头变灰：不是"点了没反应"，而是看得见"已经到头了"
+    const max = stepperAt(x.OUTPUT_FONT_MAX);
+    assert.equal(byText(max, 'A+').props.disabled, true, '最大档时 A+ 应该变灰');
+    assert.equal(byText(max, 'A−').props.disabled, false, '最大档时 A− 仍然可用');
+    assert.equal(byText(stepperAt(x.OUTPUT_FONT_MIN), 'A−').props.disabled, true, '最小档时 A− 应该变灰');
+
+    // 没给 onFont 的渲染（离线预览等）不画这组钮，图钉照旧
+    const plain = mountInteractions('RunPreviewCard', common);
+    assert.equal(
+      plain.inTree(plain.tree, (node) => node.type === plain.internals.OutputFontStepper).length,
+      0,
+      '没有 onFont 时不该画字号钮',
+    );
+    assert.ok(
+      plain.inTree(plain.tree, (node) =>
+        typeof node.props?.className === 'string' &&
+        node.props.className.split(/\s+/u).includes('__ru_pinBtn'),
+      ).length === 1,
+      '图钉要一直在',
+    );
+  });
+
+  await check('字号与密度纯函数：clampOutputFont / outputCardScale / densityFromPoll', () => {
+    // 读进来的怪值一律收敛，绝不让"字号 = NaN"这种状态进到样式里
+    assert.equal(x.clampOutputFont(12), 12);
+    assert.equal(x.clampOutputFont('14.6'), 15, '字符串也要认，并取整');
+    assert.equal(x.clampOutputFont(1), x.OUTPUT_FONT_MIN, '太小夹到最小档');
+    assert.equal(x.clampOutputFont(999), x.OUTPUT_FONT_MAX, '太大夹到最大档');
+    assert.equal(x.clampOutputFont('nope'), x.OUTPUT_FONT_DEFAULT);
+    assert.equal(x.clampOutputFont(undefined), x.OUTPUT_FONT_DEFAULT);
+    assert.equal(x.outputCardScale(x.OUTPUT_FONT_DEFAULT), 1);
+    assert.equal(x.outputCardScale(x.OUTPUT_FONT_MAX), x.OUTPUT_FONT_MAX / x.OUTPUT_FONT_DEFAULT);
+
+    /**
+     * 密度：**这就是"点一下切到完整信息、几秒后自己跳回仅图标"的那个 bug**。
+     * 轮询每 2.5 秒带回一次 host 的旧值；本地刚点的档位在 host 确认之前不许被盖。
+     */
+    assert.equal(x.densityFromPoll('icon', 'full'), null, '本地刚点完整，轮询带回旧图标 → 不许盖');
+    assert.equal(x.densityFromPoll('icon', null), 'icon', '本地没改动 → 采纳 host 的值');
+    assert.equal(x.densityFromPoll('full', 'full'), 'full', 'host 已经跟上 → 采纳并清掉待确认');
+    assert.equal(x.densityFromPoll(undefined, 'compact'), null, 'host 没写过密度 → 不动');
   });
 
   /* ── 交互级：浮动条悬停接线 ── */
@@ -862,6 +1005,9 @@ await (async () => {
     m.flush();
     assert.equal(cards().length, 1, `悬停要出卡：${cards().length}`);
     assert.equal(cards()[0].props.run.label, '启动 Piscellum', '卡里带的是这条 run');
+    // 字号是壳的偏好，条负责把它接到卡上（卡头的 A−/A+ 才能真的改到字号）
+    assert.equal(cards()[0].props.font, x.OUTPUT_FONT_DEFAULT, '条没把字号传给卡');
+    assert.equal(typeof cards()[0].props.onFont, 'function', '条没把改字号的回调传给卡');
     // 图钉动作从卡上直接可触发，回调带上条目 id
     cards()[0].props.onTogglePin();
     assert.deepEqual(toggled, ['piscellum/launch'], '图钉回调要带条目 id');
