@@ -528,22 +528,36 @@ const CSS = [
   // 为什么必须换掉 `--dsw-alias-button-floating-fill`：实测它和输入框卡片的
   // `--dsw-specific-input-major` **是同一个色**（都是 #2c2c2e），紧挨着看就是一个盒子；
   // 而 `--dsw-specific-menu` 是 #43454a73，与卡片明显不同。
-  '.__ru_bar{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;min-width:0;height:34px;padding:0 8px;border-radius:var(--dsw-radius-lg);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);box-shadow:var(--dsw-elevation-panel);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1;overflow:hidden}',
-  '.__ru_btn{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:none;border-radius:100px;background:transparent;color:inherit;font:inherit;font-size:13px;line-height:1;cursor:pointer;white-space:nowrap;flex:none;max-width:190px}',
+  // `--ru-btn-font` / `--ru-btn-icon` 是**胶囊文字与图标尺寸的唯一出处**：三档密度
+  // 只改盒子（高度、内边距、间距、文字截断），不改这两个数（原因见下面紧凑档那段）。
+  '.__ru_bar{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;min-width:0;height:34px;padding:0 8px;border-radius:var(--dsw-radius-lg);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--ru-btn-font:13px;--ru-btn-icon:16px;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);box-shadow:var(--dsw-elevation-panel);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1;overflow:hidden}',
+  '.__ru_btn{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:none;border-radius:100px;background:transparent;color:inherit;font:inherit;font-size:var(--ru-btn-font,13px);line-height:1;cursor:pointer;white-space:nowrap;flex:none;max-width:190px}',
   '.__ru_btn:hover:not(:disabled){background:var(--dsw-alias-button-floating-hover)}',
   '.__ru_btn:disabled{opacity:.45;cursor:default}',
   '.__ru_fixed{background:var(--dsw-alias-interactive-bg-active)}',
   '.__ru_btnActive{box-shadow:inset 0 0 0 1px var(--dsw-alias-state-success-primary)}',
   '.__ru_errorBtn{color:var(--dsw-alias-state-error-primary)}',
   '.__ru_btnLabel{min-width:0;overflow:hidden;text-overflow:ellipsis}',
-  // ── 紧凑档：真的**变紧**（不是只截断文字）──
+  // ── 图标：**定尺**的方框，不跟着密度变 ──
+  // 图标是 emoji / 字形，宽度本来就不一样（`👁` 比 `▶` 宽），直接内联进胶囊会
+  // 让同一档里每个按钮的图标忽大忽小、按钮宽度也跟着跳。这里统一塞进 16×16 的
+  // 居中框、字号固定：三档密度、每颗按钮看到的图标都是同一个尺寸。
+  '.__ru_btnIcon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:var(--ru-btn-icon,16px);height:var(--ru-btn-icon,16px);font-size:var(--ru-btn-font,13px);line-height:1}',
+  // ── 紧凑档：真的**变紧**（不是只截断文字），但**只紧盒子、不动字与图标** ──
   // 早先 compact 只做"文字超过 12 字就截断"，可绝大多数标签（`全量检查`、
-  // `重建客户端包`）都在 12 字以内，于是**完整档和紧凑档长得一模一样**。
-  // 现在紧凑档把胶囊与间距一起收紧（22px 高、内边距 0 6px、间距 4px、字号 12px），
-  // 无论标签长短都能一眼看出档位；文字截断门槛也降到 8 字，长的再补一刀。
+  // `重建客户端包`）都在 12 字以内，于是**完整档和紧凑档长得一模一样**。后来
+  // 紧凑档连字号一起降到 12px——那又走到另一头：同一批可运行项目在完整/仅图标里
+  // 是 13px、切到紧凑变 12px，图标也跟着缩，按档位来回对比就是"字和图标忽大忽小"。
+  // 现在密度只由盒子承担（22px 高、内边距 0 6px、间距 4px），字号与图标尺寸三档一致；
+  // 文字截断门槛保持在 8 字（`COMPACT_MAX_CHARS`）。
   '.__ru_bar[data-density="compact"]{gap:4px;padding:0 6px}',
-  '.__ru_bar[data-density="compact"] .__ru_btn{height:22px;padding:0 6px;gap:4px;font-size:12px}',
+  '.__ru_bar[data-density="compact"] .__ru_btn{height:22px;padding:0 6px;gap:4px}',
   '.__ru_bar[data-density="compact"] .__ru_grow,.__ru_bar[data-density="compact"] .__ru_tail{gap:4px}',
+  // ── 仅图标档：没有文字以后胶囊会变成一个横向的扁条 ──
+  // 26px 高、只剩一个图标时，横向内边距仍是 9px 的话，胶囊宽 30+ 而高 26，
+  // 在视觉上比完整档的胶囊"胖一圈"。仅图标档把左右内边距收到 5px：静止时
+  // 16+5+5 = 26 → 正好是 26×26 的圆；跑起来多一个状态点也还是同高的圆角条。
+  '.__ru_bar[data-density="icon"] .__ru_btn[data-icon-only="true"]{justify-content:center;min-width:26px;padding:0 5px;gap:4px}',
   '.__ru_dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--dsw-alias-state-success-primary)}',
   // 状态点：就绪=绿（成功），还在跑=琥珀（警告色）+ 呼吸，停不下来=红。
   // 早先不管什么状态都是同一个绿点，"点了半天没动静"根本分不清是在跑还是已经起来。
@@ -1778,7 +1792,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                   onClosePanel();
                 }}
               >
-                <span aria-hidden="true">{iconGlyph(button.icon)}</span>
+                <span className="__ru_btnIcon" aria-hidden="true">{iconGlyph(button.icon)}</span>
                 <span>{button.label ?? button.entryLabel}</span>
               </button>
             );
@@ -1810,7 +1824,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
           aria-label={densityHint}
         >
           {/* 字形恒定（"这是一个控件"的标记），档位靠文字说清楚 */}
-          <span aria-hidden="true">▤</span>
+          <span className="__ru_btnIcon" aria-hidden="true">▤</span>
           <span className="__ru_btnLabel">{densityStateLabel}</span>
         </button>
 
@@ -1851,6 +1865,8 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                 disabled={busy !== null}
                 data-entry={button.entry}
                 data-status={active ? (status ?? 'running') : 'idle'}
+                // 仅图标档下没有文字，胶囊要靠这条属性换成"方形"内边距（见 CSS）。
+                data-icon-only={text.length === 0 ? 'true' : 'false'}
                 onMouseEnter={
                   active
                     ? (event) => {
@@ -1865,7 +1881,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                   (active ? `（${statusLabel}）` : '')
                 }
               >
-                <span aria-hidden="true">{iconGlyph(button.icon)}</span>
+                <span className="__ru_btnIcon" aria-hidden="true">{iconGlyph(button.icon)}</span>
                 {text.length > 0 ? <span className="__ru_btnLabel">{text}</span> : null}
                 {active ? <span className="__ru_dot" /> : null}
               </button>
