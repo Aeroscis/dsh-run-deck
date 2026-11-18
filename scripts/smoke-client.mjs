@@ -478,6 +478,32 @@ await (async () => {
     assert.equal(x.OUTPUT_CARD_BASE_HEIGHT, 250);
   });
 
+  await check('三档密度的字号与图标一致：密度只紧盒子，不缩字、不缩图标', () => {
+    const css = String(x.CSS ?? '');
+    /** 按选择器取一条规则的原文（选择器里的正则元字符全部转义）。 */
+    const rule = (selector) =>
+      new RegExp(`(${selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')})\\{[^}]*\\}`, 'u').exec(css)?.[0] ??
+      '';
+    // 字号与图标尺寸只在这条上定义一次：三档密度共用
+    const barRule = rule('.__ru_bar');
+    assert.match(barRule, /--ru-btn-font:13px/u, `条上没有定义胶囊字号变量（${barRule}）`);
+    assert.match(barRule, /--ru-btn-icon:16px/u, '条上没有定义图标尺寸变量');
+    assert.match(rule('.__ru_btn'), /font-size:var\(--ru-btn-font/u, '胶囊字号没走 --ru-btn-font');
+    // 图标塞在定尺方框里：emoji 本身宽窄不一，不套框就会带着胶囊一起抖
+    const iconRule = rule('.__ru_btnIcon');
+    assert.match(iconRule, /width:var\(--ru-btn-icon/u, '图标没有定尺宽度');
+    assert.match(iconRule, /height:var\(--ru-btn-icon/u, '图标没有定尺高度');
+    // 紧凑档：只改高度/内边距/间距 —— **出现 font-size 就是"换档字号变小"回潮**
+    const compactBtn = rule('.__ru_bar[data-density="compact"] .__ru_btn');
+    assert.ok(compactBtn.length > 0, '紧凑档的胶囊规则不见了');
+    assert.match(compactBtn, /height:22px/u, '紧凑档没有收紧胶囊高度');
+    assert.doesNotMatch(compactBtn, /font-size/u, '紧凑档又去改字号了：三档的字必须一样大');
+    // 仅图标档：没有文字后胶囊要收成正圆，不能是横向扁条
+    const iconOnly = rule('.__ru_bar[data-density="icon"] .__ru_btn[data-icon-only="true"]');
+    assert.ok(iconOnly.length > 0, '仅图标档缺少方形胶囊的规则');
+    assert.match(iconOnly, /min-width:26px/u, '仅图标档的胶囊没有最小宽度（会缩成扁条）');
+  });
+
   /* ── 交互级：管理面板的删除二次确认 ── */
 
   const zh = (key) => x.ZH[key] ?? key;
@@ -515,6 +541,27 @@ await (async () => {
     pinnedEntry: null,
     onTogglePin: () => {},
   };
+
+  await check('可运行项目的按钮三档都带图标框，仅图标档才标 data-icon-only', () => {
+    const buttons = [
+      { entry: 'a/web', icon: 'eye', group: 'g', order: 10, projectRoot: 'D:/p', entryLabel: '启动 Piscellum' },
+    ];
+    for (const density of ['full', 'compact', 'icon']) {
+      const m = mountInteractions('FloatingBar', { ...baseBarProps, density, buttons });
+      const runBtn = m.buttonsIn(m.tree).find((node) => node.props?.['data-entry'] === 'a/web');
+      assert.ok(runBtn, `${density}：找不到可运行项目的按钮`);
+      assert.equal(
+        runBtn.props['data-icon-only'],
+        density === 'icon' ? 'true' : 'false',
+        `${density}：data-icon-only 不对（仅图标档才该是方形内边距）`,
+      );
+      const icons = m.inTree(runBtn, (node) =>
+        typeof node.props?.className === 'string' &&
+        node.props.className.split(/\s+/u).includes('__ru_btnIcon'),
+      );
+      assert.equal(icons.length, 1, `${density}：图标没有套 __ru_btnIcon 定尺框`);
+    }
+  });
 
   await check('管理面板的删除有二次确认：直接删除不动手、取消回得来、确认只删那一条', async () => {
     const entries = [
