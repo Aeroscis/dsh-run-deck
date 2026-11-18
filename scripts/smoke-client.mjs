@@ -494,14 +494,37 @@ await (async () => {
     assert.match(iconRule, /width:var\(--ru-btn-icon/u, '图标没有定尺宽度');
     assert.match(iconRule, /height:var\(--ru-btn-icon/u, '图标没有定尺高度');
     // 紧凑档：只改高度/内边距/间距 —— **出现 font-size 就是"换档字号变小"回潮**
-    const compactBtn = rule('.__ru_bar[data-density="compact"] .__ru_btn');
+    const compactBtn = rule('.__ru_bar[data-density="compact"] .__ru_grow .__ru_btn');
     assert.ok(compactBtn.length > 0, '紧凑档的胶囊规则不见了');
     assert.match(compactBtn, /height:22px/u, '紧凑档没有收紧胶囊高度');
     assert.doesNotMatch(compactBtn, /font-size/u, '紧凑档又去改字号了：三档的字必须一样大');
     // 仅图标档：没有文字后胶囊要收成正圆，不能是横向扁条
-    const iconOnly = rule('.__ru_bar[data-density="icon"] .__ru_btn[data-icon-only="true"]');
+    const iconOnly = rule('.__ru_bar[data-density="icon"] .__ru_grow .__ru_btn[data-icon-only="true"]');
     assert.ok(iconOnly.length > 0, '仅图标档缺少方形胶囊的规则');
     assert.match(iconOnly, /min-width:26px/u, '仅图标档的胶囊没有最小宽度（会缩成扁条）');
+  });
+
+  await check('密度只管内容区：左侧模式钮与右侧 ☰/+/⚙ 在三档里尺寸与位置都不变', () => {
+    const css = String(x.CSS ?? '');
+    // 密度规则一律挂在 .__ru_grow（内容区）下，**不许**有直接命中整条所有胶囊的写法。
+    // 早先 `.__ru_bar[data-density="compact"] .__ru_btn{...}` 会把尾部三个固定钮
+    // 一起缩到 22px、内边距 6px，"换个模式右边三个按钮也变了"。
+    const densityRules = css.match(/\.__ru_bar\[data-density="[a-z]+"\][^{]*\{[^}]*\}/gu) ?? [];
+    assert.ok(densityRules.length >= 2, `密度规则数量不对：${densityRules.length}`);
+    for (const ruleText of densityRules) {
+      assert.match(
+        ruleText,
+        /\.__ru_grow/u,
+        `密度规则不够具体，会连带改到固定钮：${ruleText}`,
+      );
+      assert.doesNotMatch(ruleText, /\.__ru_tail/u, `密度规则碰到了右侧固定钮：${ruleText}`);
+    }
+    // 条的 padding / gap 也由条自己定：密度只改内容区，控件因此落在同一位置。
+    assert.doesNotMatch(
+      css,
+      /\.__ru_bar\[data-density="[a-z]+"\]\{(?![^}]*\.__ru_grow)[^}]*padding/u,
+      '密度改到了条的内边距：固定钮的位置会跟着档位横移',
+    );
   });
 
   /* ── 交互级：管理面板的删除二次确认 ── */

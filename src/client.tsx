@@ -543,21 +543,25 @@ const CSS = [
   // 让同一档里每个按钮的图标忽大忽小、按钮宽度也跟着跳。这里统一塞进 16×16 的
   // 居中框、字号固定：三档密度、每颗按钮看到的图标都是同一个尺寸。
   '.__ru_btnIcon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:var(--ru-btn-icon,16px);height:var(--ru-btn-icon,16px);font-size:var(--ru-btn-font,13px);line-height:1}',
-  // ── 紧凑档：真的**变紧**（不是只截断文字），但**只紧盒子、不动字与图标** ──
+  // ── 紧凑档：真的**变紧**（不是只截断文字），但只紧**内容胶囊** ──
   // 早先 compact 只做"文字超过 12 字就截断"，可绝大多数标签（`全量检查`、
   // `重建客户端包`）都在 12 字以内，于是**完整档和紧凑档长得一模一样**。后来
   // 紧凑档连字号一起降到 12px——那又走到另一头：同一批可运行项目在完整/仅图标里
   // 是 13px、切到紧凑变 12px，图标也跟着缩，按档位来回对比就是"字和图标忽大忽小"。
   // 现在密度只由盒子承担（22px 高、内边距 0 6px、间距 4px），字号与图标尺寸三档一致；
   // 文字截断门槛保持在 8 字（`COMPACT_MAX_CHARS`）。
-  '.__ru_bar[data-density="compact"]{gap:4px;padding:0 6px}',
-  '.__ru_bar[data-density="compact"] .__ru_btn{height:22px;padding:0 6px;gap:4px}',
-  '.__ru_bar[data-density="compact"] .__ru_grow,.__ru_bar[data-density="compact"] .__ru_tail{gap:4px}',
+  //
+  // **作用域是 `.__ru_grow`，不是整条 `.__ru_btn`**：密度说的是"这一排项目怎么看"，
+  // 而左侧模式钮与右侧 `☰`/`+`/`⚙` 是**控件**——早先它们一起被缩到 22px、内边距 6px，
+  // 于是"换个模式，右边三个按钮也跟着变"看起来很怪。控件在三档里尺寸、位置一致，
+  // 条本身的 padding/gap 也不随密度变，所以固定钮在任何档位都落在同一个位置。
+  '.__ru_bar[data-density="compact"] .__ru_grow{gap:4px}',
+  '.__ru_bar[data-density="compact"] .__ru_grow .__ru_btn{height:22px;padding:0 6px;gap:4px}',
   // ── 仅图标档：没有文字以后胶囊会变成一个横向的扁条 ──
   // 26px 高、只剩一个图标时，横向内边距仍是 9px 的话，胶囊宽 30+ 而高 26，
   // 在视觉上比完整档的胶囊"胖一圈"。仅图标档把左右内边距收到 5px：静止时
   // 16+5+5 = 26 → 正好是 26×26 的圆；跑起来多一个状态点也还是同高的圆角条。
-  '.__ru_bar[data-density="icon"] .__ru_btn[data-icon-only="true"]{justify-content:center;min-width:26px;padding:0 5px;gap:4px}',
+  '.__ru_bar[data-density="icon"] .__ru_grow .__ru_btn[data-icon-only="true"]{justify-content:center;min-width:26px;padding:0 5px;gap:4px}',
   '.__ru_dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--dsw-alias-state-success-primary)}',
   // 状态点：就绪=绿（成功），还在跑=琥珀（警告色）+ 呼吸，停不下来=红。
   // 早先不管什么状态都是同一个绿点，"点了半天没动静"根本分不清是在跑还是已经起来。
@@ -1199,12 +1203,16 @@ function reportGeometry(): void {
     }
     const rows = container === null ? null : effectiveRows(container);
 
-    // 当前档位 + 一个胶囊的**实际**尺寸：紧凑档的 CSS 有没有真的生效，
+    // 当前档位 + 一个**内容胶囊**的**实际**尺寸：紧凑档的 CSS 有没有真的生效，
     // 只能这样看（"完整和紧凑长得一样"就是靠这个查出来的）。
     // 图标那一格也一起量：三档的字号与图标尺寸必须一致，就看这两个数对不对得上。
+    // `ctrl` 量的是右侧固定钮（☰）：密度只管内容区，这个数在三档里必须不变。
     const barElement = root.querySelector('.__ru_bar');
-    const chipElement = root.querySelector('.__ru_bar .__ru_btn');
+    const chipElement = root.querySelector('.__ru_bar .__ru_grow .__ru_btn');
     const chipIcon = chipElement?.querySelector('.__ru_btnIcon') ?? null;
+    const controlElement = root.querySelector('.__ru_bar .__ru_tail .__ru_btn');
+    const sizeOf = (element: Element | null): string | null =>
+      element === null ? null : `${getComputedStyle(element).height}/${getComputedStyle(element).paddingLeft}`;
     const density = {
       marker: barElement?.getAttribute('data-density') ?? null,
       chipHeight: chipElement === null ? null : getComputedStyle(chipElement).height,
@@ -1214,6 +1222,10 @@ function reportGeometry(): void {
         chipIcon === null
           ? null
           : `${getComputedStyle(chipIcon).width}x${getComputedStyle(chipIcon).height}`,
+      /** 固定钮的 `高度/左内边距`：换档位时它跟着变就是密度规则漏到控件上了。 */
+      control: sizeOf(controlElement),
+      /** 条自身的 `内边距/间距`：这一对也不随密度变（否则固定钮会横移）。 */
+      bar: barElement === null ? null : `${getComputedStyle(barElement).paddingLeft}/${getComputedStyle(barElement).columnGap}`,
     };
 
     // 层叠实测：弹层 vs 宿主「回到底部」圆钮（见 probeStacking 的注释）。
@@ -1224,7 +1236,7 @@ function reportGeometry(): void {
       (rows ?? [])
         .map((row) => `${row.what}@${row.top}-${row.bottom}w${row.width}/${row.bg}/${row.radius}`)
         .join('|') +
-      `#${density.marker}/${density.chipHeight}/${density.chipFont}/${density.chipIcon}` +
+      `#${density.marker}/${density.chipHeight}/${density.chipFont}/${density.chipIcon}/${density.control}/${density.bar}` +
       // 层叠那段只放**稳定的结论**进指纹：rect 会随滚动抖，塞进来只会刷屏
       `#stack:${stack === null ? 'null' : `${stack.popupOpen}/${stack.button === null ? 'noButton' : 'button'}/${stack.verdict}`}`;
     if (signature === geometrySignature) return;
