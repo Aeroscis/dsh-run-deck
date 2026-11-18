@@ -1,6 +1,6 @@
 {
   "name": "@aeroscis/dsh-run-deck",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Run configuration for DeepSeek Harness: run, stop and rerun the entries a project declares in .dsh/run-deck/run.json, from a pinnable floating row above the message composer. The vocabulary is VS Code tasks.json. 运行配置：按项目 .dsh/run-deck/run.json 里声明的条目跑 / 停 / 重跑，附可钉住的浮动按钮。",
   "type": "module",
   "main": "lib/index.js",

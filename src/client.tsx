@@ -62,6 +62,66 @@ const CLIENT_VERSION = '__DSH_PLUGIN_VERSION__';
  */
 const COMPACT_MAX_CHARS = 8;
 
+/**
+ * 输出卡的字体档位（px）。
+ *
+ * 11 是原来写死在 CSS 里的字号，所以它是默认档；可用范围 9–18。
+ *
+ * 字号**不只是把字放大**：整张卡按 `font / OUTPUT_FONT_DEFAULT` 等比缩放
+ * （`OUTPUT_CARD_BASE_WIDTH` / `OUTPUT_CARD_BASE_HEIGHT` 是这两个基数），
+ * 否则字一大就把窗口塞满、滚来滚去，等于没调。
+ */
+const OUTPUT_FONT_DEFAULT = 11;
+const OUTPUT_FONT_MIN = 9;
+const OUTPUT_FONT_MAX = 18;
+
+/** 输出卡的基准宽高（px，默认字号下）。CSS 里的 min(...) 全部从这两个数算。 */
+const OUTPUT_CARD_BASE_WIDTH = 560;
+const OUTPUT_CARD_BASE_HEIGHT = 250;
+
+/**
+ * 字号偏好的浏览器本地存储键。
+ *
+ * 为什么放在浏览器里而不是 `layout.json`：这是**纯界面偏好**（和按钮密度不同，
+ * 密度是宿主持有的布局），host 侧没有对应字段；为它加一条宿主路由得重启 DSH
+ * 才挂得上。要跨机器带走的话，那是以后再说的另一件事。
+ */
+const OUTPUT_FONT_KEY = 'dsh-run-deck.outputFont.v1';
+
+/** 字号与缩放比从 JS 写进 CSS 的自定义属性名（只在这两处用到，避免两边各写一遍）。 */
+const OUTPUT_FONT_VAR = '--ru-out-font';
+const OUTPUT_CARD_SCALE_VAR = '--ru-out-scale';
+
+/** 字号收敛到可用档位（非数字 / 非正数 → 默认档）。 */
+function clampOutputFont(value: unknown): number {
+  const number = typeof value === 'number' ? value : Number.parseFloat(String(value ?? '').trim());
+  if (!Number.isFinite(number) || number <= 0) return OUTPUT_FONT_DEFAULT;
+  return Math.min(OUTPUT_FONT_MAX, Math.max(OUTPUT_FONT_MIN, Math.round(number)));
+}
+
+/** 字号 → 整张卡的缩放比（1 = 默认档）。 */
+function outputCardScale(font: number | undefined): number {
+  return clampOutputFont(font) / OUTPUT_FONT_DEFAULT;
+}
+
+/** 读本机记住的字号（读不到 = 默认档）。 */
+function readStoredOutputFont(): number {
+  try {
+    return clampOutputFont(window.localStorage.getItem(OUTPUT_FONT_KEY));
+  } catch {
+    return OUTPUT_FONT_DEFAULT;
+  }
+}
+
+/** 记住字号；存不了就算了，最多下次打开回到默认档。 */
+function rememberOutputFont(font: number): void {
+  try {
+    window.localStorage.setItem(OUTPUT_FONT_KEY, String(clampOutputFont(font)));
+  } catch {
+    /* 浏览器不让存时静默降级 */
+  }
+}
+
 /* ─────────────────────────── 文案 ─────────────────────────── */
 
 const ZH: Record<string, string> = {
@@ -86,6 +146,10 @@ const ZH: Record<string, string> = {
   densityCompact: '紧凑',
   densityIcon: '仅图标',
   densityCycle: '点击切换',
+  outputFontGroup: '输出字号',
+  outputFontSmaller: '缩小输出字号',
+  outputFontLarger: '放大输出字号',
+  outputFontReset: '点一下恢复默认字号（11px）；窗口会跟着字号一起缩放',
   overflow: '更多按钮',
   add: '添加按钮',
   settings: '设置',
@@ -218,6 +282,10 @@ const EN: Record<string, string> = {
   densityCompact: 'Compact',
   densityIcon: 'Icons only',
   densityCycle: 'Click to cycle',
+  outputFontGroup: 'Output font size',
+  outputFontSmaller: 'Smaller output text',
+  outputFontLarger: 'Larger output text',
+  outputFontReset: 'Click to reset to the default size (11px); the window scales with the text',
   overflow: 'More buttons',
   add: 'Add button',
   settings: 'Settings',
@@ -460,22 +528,40 @@ const CSS = [
   // 为什么必须换掉 `--dsw-alias-button-floating-fill`：实测它和输入框卡片的
   // `--dsw-specific-input-major` **是同一个色**（都是 #2c2c2e），紧挨着看就是一个盒子；
   // 而 `--dsw-specific-menu` 是 #43454a73，与卡片明显不同。
-  '.__ru_bar{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;min-width:0;height:34px;padding:0 8px;border-radius:var(--dsw-radius-lg);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);box-shadow:var(--dsw-elevation-panel);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1;overflow:hidden}',
-  '.__ru_btn{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:none;border-radius:100px;background:transparent;color:inherit;font:inherit;font-size:13px;line-height:1;cursor:pointer;white-space:nowrap;flex:none;max-width:190px}',
+  // `--ru-btn-font` / `--ru-btn-icon` 是**胶囊文字与图标尺寸的唯一出处**：三档密度
+  // 只改盒子（高度、内边距、间距、文字截断），不改这两个数（原因见下面紧凑档那段）。
+  '.__ru_bar{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;min-width:0;height:34px;padding:0 8px;border-radius:var(--dsw-radius-lg);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--ru-btn-font:13px;--ru-btn-icon:16px;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);box-shadow:var(--dsw-elevation-panel);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1;overflow:hidden}',
+  '.__ru_btn{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:none;border-radius:100px;background:transparent;color:inherit;font:inherit;font-size:var(--ru-btn-font,13px);line-height:1;cursor:pointer;white-space:nowrap;flex:none;max-width:190px}',
   '.__ru_btn:hover:not(:disabled){background:var(--dsw-alias-button-floating-hover)}',
   '.__ru_btn:disabled{opacity:.45;cursor:default}',
   '.__ru_fixed{background:var(--dsw-alias-interactive-bg-active)}',
   '.__ru_btnActive{box-shadow:inset 0 0 0 1px var(--dsw-alias-state-success-primary)}',
   '.__ru_errorBtn{color:var(--dsw-alias-state-error-primary)}',
   '.__ru_btnLabel{min-width:0;overflow:hidden;text-overflow:ellipsis}',
-  // ── 紧凑档：真的**变紧**（不是只截断文字）──
+  // ── 图标：**定尺**的方框，不跟着密度变 ──
+  // 图标是 emoji / 字形，宽度本来就不一样（`👁` 比 `▶` 宽），直接内联进胶囊会
+  // 让同一档里每个按钮的图标忽大忽小、按钮宽度也跟着跳。这里统一塞进 16×16 的
+  // 居中框、字号固定：三档密度、每颗按钮看到的图标都是同一个尺寸。
+  '.__ru_btnIcon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:var(--ru-btn-icon,16px);height:var(--ru-btn-icon,16px);font-size:var(--ru-btn-font,13px);line-height:1}',
+  // ── 紧凑档：真的**变紧**（不是只截断文字），但只紧**内容胶囊** ──
   // 早先 compact 只做"文字超过 12 字就截断"，可绝大多数标签（`全量检查`、
-  // `重建客户端包`）都在 12 字以内，于是**完整档和紧凑档长得一模一样**。
-  // 现在紧凑档把胶囊与间距一起收紧（22px 高、内边距 0 6px、间距 4px、字号 12px），
-  // 无论标签长短都能一眼看出档位；文字截断门槛也降到 8 字，长的再补一刀。
-  '.__ru_bar[data-density="compact"]{gap:4px;padding:0 6px}',
-  '.__ru_bar[data-density="compact"] .__ru_btn{height:22px;padding:0 6px;gap:4px;font-size:12px}',
-  '.__ru_bar[data-density="compact"] .__ru_grow,.__ru_bar[data-density="compact"] .__ru_tail{gap:4px}',
+  // `重建客户端包`）都在 12 字以内，于是**完整档和紧凑档长得一模一样**。后来
+  // 紧凑档连字号一起降到 12px——那又走到另一头：同一批可运行项目在完整/仅图标里
+  // 是 13px、切到紧凑变 12px，图标也跟着缩，按档位来回对比就是"字和图标忽大忽小"。
+  // 现在密度只由盒子承担（22px 高、内边距 0 6px、间距 4px），字号与图标尺寸三档一致；
+  // 文字截断门槛保持在 8 字（`COMPACT_MAX_CHARS`）。
+  //
+  // **作用域是 `.__ru_grow`，不是整条 `.__ru_btn`**：密度说的是"这一排项目怎么看"，
+  // 而左侧模式钮与右侧 `☰`/`+`/`⚙` 是**控件**——早先它们一起被缩到 22px、内边距 6px，
+  // 于是"换个模式，右边三个按钮也跟着变"看起来很怪。控件在三档里尺寸、位置一致，
+  // 条本身的 padding/gap 也不随密度变，所以固定钮在任何档位都落在同一个位置。
+  '.__ru_bar[data-density="compact"] .__ru_grow{gap:4px}',
+  '.__ru_bar[data-density="compact"] .__ru_grow .__ru_btn{height:22px;padding:0 6px;gap:4px}',
+  // ── 仅图标档：没有文字以后胶囊会变成一个横向的扁条 ──
+  // 26px 高、只剩一个图标时，横向内边距仍是 9px 的话，胶囊宽 30+ 而高 26，
+  // 在视觉上比完整档的胶囊"胖一圈"。仅图标档把左右内边距收到 5px：静止时
+  // 16+5+5 = 26 → 正好是 26×26 的圆；跑起来多一个状态点也还是同高的圆角条。
+  '.__ru_bar[data-density="icon"] .__ru_grow .__ru_btn[data-icon-only="true"]{justify-content:center;min-width:26px;padding:0 5px;gap:4px}',
   '.__ru_dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--dsw-alias-state-success-primary)}',
   // 状态点：就绪=绿（成功），还在跑=琥珀（警告色）+ 呼吸，停不下来=红。
   // 早先不管什么状态都是同一个绿点，"点了半天没动静"根本分不清是在跑还是已经起来。
@@ -551,12 +637,16 @@ const CSS = [
   '.__ru_runTail{margin:0;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-family-mono,monospace);font-size:11px;line-height:16px;white-space:pre-wrap;word-break:break-word;user-select:text;max-height:240px;overflow:auto}',
   // 输出面板：把执行缝本来就攒着的最近几百行接出来摊开看。
   // 输出**一直在被收着**（尾行 800ms 一拍），之前只是没有一个口子亮出来。
-  '.__ru_outView{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-family-mono,monospace);font-size:11px;line-height:16px;white-space:pre-wrap;word-break:break-word;user-select:text;max-height:min(50vh,320px);overflow:auto}',
+  // 字号走 `--ru-out-font`（卡根节点上按档位写进来）：改字号就是改这一个变量，
+  // 行高按同一比例算，不然大字号下几行就挤成一片。
+  `.__ru_outView{margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-family-mono,monospace);font-size:var(${OUTPUT_FONT_VAR},${OUTPUT_FONT_DEFAULT}px);line-height:calc(var(${OUTPUT_FONT_VAR},${OUTPUT_FONT_DEFAULT}px) * 1.45);white-space:pre-wrap;word-break:break-word;user-select:text;max-height:min(50vh,320px);overflow:auto}`,
   '.__ru_outStatus{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400}',
   // ⌃ 输出悬浮卡：悬停出现、拿开消失、📌 钉住常驻。类名挂 `__ru_pop` 是借它两件事：
   // "绝对定位在条上方"与宿主 seat 的抬升规则（:has(. __ru_pop)）；下面的条目覆盖 pop 的
-  // 通栏左宽——卡只 560px 宽（输出短时更矮更窄），不盖满。
-  `.__ru_hover{display:flex;flex-direction:column;gap:6px;right:auto;width:min(560px,calc(100% - 16px));max-height:min(46vh,250px,var(${POPUP_SPACE_VAR},100vh));padding:10px 12px;border-radius:12px}`,
+  // 通栏左宽——卡默认 560×250（输出短时更矮更窄），不盖满。
+  // **宽高都乘 `--ru-out-scale`**：卡头的字号钮一调，窗口跟着等比放大/缩小，
+  // 否则字变大只是把可见行数变少、还得在里面滚。
+  `.__ru_hover{display:flex;flex-direction:column;gap:6px;right:auto;width:min(calc(${OUTPUT_CARD_BASE_WIDTH}px * var(${OUTPUT_CARD_SCALE_VAR},1)),calc(100% - 16px));max-height:min(46vh,calc(${OUTPUT_CARD_BASE_HEIGHT}px * var(${OUTPUT_CARD_SCALE_VAR},1)),var(${POPUP_SPACE_VAR},100vh));padding:10px 12px;border-radius:12px}`,
   '.__ru_hoverHead{display:flex;align-items:center;gap:6px;min-width:0}',
   // 脚本名不再吃 flex:1：状态徽章贴着名字排，剩下的空隙由弹簧吃掉，图钉落到最右。
   '.__ru_hoverLabel{min-width:0;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}',
@@ -576,6 +666,16 @@ const CSS = [
   '.__ru_pinBtn{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:22px;padding:0 7px;border:none;border-radius:100px;background:transparent;color:inherit;font:inherit;font-size:12px;line-height:1;cursor:pointer}',
   '.__ru_pinText{white-space:nowrap}',
   '.__ru_pinBtn:hover{background:var(--dsw-alias-button-floating-hover)}',
+  // ── 输出字号：卡头右侧那组 `A− 12 A+` ──
+  // 三颗钮做成一个描边胶囊（中间那颗显示当前档位、点它回默认），和旁边的图钉
+  // 在视觉上分成"调卡"与"钉卡"两组；高度与图钉一致（22px 里取 20px），不把卡头撑高。
+  '.__ru_fontBox{flex:none;display:inline-flex;align-items:center;border:1px solid var(--dsw-alias-border-l2);border-radius:100px;overflow:hidden}',
+  '.__ru_fontBtn{box-sizing:border-box;flex:none;height:20px;min-width:20px;padding:0 5px;border:none;background:transparent;color:inherit;font:inherit;font-size:11px;line-height:1;cursor:pointer}',
+  '.__ru_fontBtn:hover:not(:disabled){background:var(--dsw-alias-button-floating-hover)}',
+  '.__ru_fontBtn:disabled{opacity:.35;cursor:default}',
+  // 当前档位那颗：数字用等宽数位，来回加减时宽度不跳。
+  '.__ru_fontValue{box-sizing:border-box;flex:none;height:20px;min-width:22px;padding:0 2px;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:1;font-variant-numeric:tabular-nums;cursor:pointer}',
+  '.__ru_fontValue:hover{color:var(--dsw-alias-label-primary)}',
   '.__ru_row{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;margin-bottom:6px;background:var(--dsw-alias-bg-layer-1)}',
   '.__ru_row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
   // ── 拖动排序（指针事件，**不是** HTML5 draggable）──
@@ -1103,15 +1203,29 @@ function reportGeometry(): void {
     }
     const rows = container === null ? null : effectiveRows(container);
 
-    // 当前档位 + 一个胶囊的**实际**尺寸：紧凑档的 CSS 有没有真的生效，
+    // 当前档位 + 一个**内容胶囊**的**实际**尺寸：紧凑档的 CSS 有没有真的生效，
     // 只能这样看（"完整和紧凑长得一样"就是靠这个查出来的）。
+    // 图标那一格也一起量：三档的字号与图标尺寸必须一致，就看这两个数对不对得上。
+    // `ctrl` 量的是右侧固定钮（☰）：密度只管内容区，这个数在三档里必须不变。
     const barElement = root.querySelector('.__ru_bar');
-    const chipElement = root.querySelector('.__ru_bar .__ru_btn');
+    const chipElement = root.querySelector('.__ru_bar .__ru_grow .__ru_btn');
+    const chipIcon = chipElement?.querySelector('.__ru_btnIcon') ?? null;
+    const controlElement = root.querySelector('.__ru_bar .__ru_tail .__ru_btn');
+    const sizeOf = (element: Element | null): string | null =>
+      element === null ? null : `${getComputedStyle(element).height}/${getComputedStyle(element).paddingLeft}`;
     const density = {
       marker: barElement?.getAttribute('data-density') ?? null,
       chipHeight: chipElement === null ? null : getComputedStyle(chipElement).height,
       chipFont: chipElement === null ? null : getComputedStyle(chipElement).fontSize,
       chipPadding: chipElement === null ? null : getComputedStyle(chipElement).paddingLeft,
+      chipIcon:
+        chipIcon === null
+          ? null
+          : `${getComputedStyle(chipIcon).width}x${getComputedStyle(chipIcon).height}`,
+      /** 固定钮的 `高度/左内边距`：换档位时它跟着变就是密度规则漏到控件上了。 */
+      control: sizeOf(controlElement),
+      /** 条自身的 `内边距/间距`：这一对也不随密度变（否则固定钮会横移）。 */
+      bar: barElement === null ? null : `${getComputedStyle(barElement).paddingLeft}/${getComputedStyle(barElement).columnGap}`,
     };
 
     // 层叠实测：弹层 vs 宿主「回到底部」圆钮（见 probeStacking 的注释）。
@@ -1122,7 +1236,7 @@ function reportGeometry(): void {
       (rows ?? [])
         .map((row) => `${row.what}@${row.top}-${row.bottom}w${row.width}/${row.bg}/${row.radius}`)
         .join('|') +
-      `#${density.marker}/${density.chipHeight}/${density.chipFont}` +
+      `#${density.marker}/${density.chipHeight}/${density.chipFont}/${density.chipIcon}/${density.control}/${density.bar}` +
       // 层叠那段只放**稳定的结论**进指纹：rect 会随滚动抖，塞进来只会刷屏
       `#stack:${stack === null ? 'null' : `${stack.popupOpen}/${stack.button === null ? 'noButton' : 'button'}/${stack.verdict}`}`;
     if (signature === geometrySignature) return;
@@ -1229,6 +1343,31 @@ function densityLabelKey(density: ButtonDensity): string {
 /** 再点一下会到哪一档。 */
 function nextDensityOf(density: ButtonDensity): ButtonDensity {
   return DENSITY_CYCLE[(DENSITY_CYCLE.indexOf(density) + 1) % DENSITY_CYCLE.length] ?? 'full';
+}
+
+/**
+ * 轮询回来的密度能不能盖掉本地那一档。
+ *
+ * **这就是"点一下切到完整信息，过几秒自己跳回仅图标"的根因**：条左侧那颗循环钮
+ * 早先只改本地 state。而每 2.5 秒一轮的 `/state` 每次都带回 `layout.json` 里
+ * **旧**的密度，并且无条件 `setDensity(它)` —— 本地刚点出来的档位就这样被轮询
+ * 盖回去，看上去像"全自动、根本没碰它"。
+ *
+ * 现在点钮会同时写回 host（`/density`），但"写回还没被下一轮轮询确认"的这段
+ * 窗口里仍然不许盖：只有**本地没有待确认的档位**，或者**host 已经和本地一致**
+ * 时才采纳轮询值。写回失败时本地就一直说了算（刷新页面再回到 host 记着的那档）。
+ *
+ * @param polled host 那份 `layout.density`（没写过就是 undefined）
+ * @param pending 本地刚点下去、还没被 host 确认的档位；没有则为 null
+ * @returns 该采纳的档位；null = 保持本地不变
+ */
+function densityFromPoll(
+  polled: ButtonDensity | undefined,
+  pending: ButtonDensity | null,
+): ButtonDensity | null {
+  if (polled === undefined) return null;
+  if (pending !== null && pending !== polled) return null;
+  return polled;
 }
 
 /**
@@ -1357,7 +1496,18 @@ interface BarProps {
   runtime: Runtime;
   busy: string | null;
   actions: BarActions;
-  onCycleDensity(): void;
+  /**
+   * 改密度（条左侧的循环钮与 ⚙ 里的三颗选项都走这里）。
+   *
+   * **交给宿主壳统一处理"先本地、再写回 host"**：早先条上那颗钮只 setDensity
+   * 本地，下一轮轮询就把旧档位带回来，看起来像"自己跳回去"。只在本组件里
+   * setState 解决不了——写回 host 与"顶住轮询"都发生在壳里。
+   */
+  onSetDensity(next: ButtonDensity): void;
+  /** 输出卡的字号（px）；卡头那组 `A−/A+` 改的就是它。 */
+  outputFont: number;
+  /** 改输出卡字号（壳里收敛到可用档位并记住）。 */
+  onOutputFont(next: number): void;
   /** 打开「+」面板：只负责新建任务（写进项目 run.json）。 */
   onOpenAdd(): void;
   /** 打开「☰」面板：管理成员（钉上/移除）与顺序（拖动排序）。 */
@@ -1424,7 +1574,7 @@ interface BarProps {
  */
 function FloatingBar(props: BarProps): React.ReactElement | null {
   const {
-    buttons, runs, density, runtime, busy, actions, onCycleDensity,
+    buttons, runs, density, runtime, busy, actions, onSetDensity,
     onOpenAdd, onOpenManage, onOpenSettings, onOpenError, onOpenOverflow, openPanel, onClosePanel,
     pinnedEntry, onTogglePin,
   } = props;
@@ -1452,14 +1602,36 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
     }, 160);
   };
   /**
+   * 当前字号下输出卡的宽度（px）：基准宽 × 字号缩放比，且不超过条宽减 16。
+   *
+   * 卡宽以前是写死的 560，字号一调窗口就宽窄不合适（大了会探出条外，小了白占地方），
+   * 现在宽度只有一个来路——和 CSS 里那条 `width:min(calc(… * --ru-out-scale), 100% - 16px)`
+   * 说同一件事，只是这里要拿数值去做左缘夹取。
+   */
+  const outputCardWidth = (hostWidth: number): number =>
+    Math.min(OUTPUT_CARD_BASE_WIDTH * outputCardScale(props.outputFont), Math.max(0, hostWidth - 16));
+
+  /**
    * 记下这颗按钮的左缘（`__ru_bar` 自己没有定位上下文 → offsetParent 就是
    * `__ru_host`），顺手把卡往里推到卡宽以内（别探出条外被裁掉半边）。
    */
   const noteChip = (entry: string, node: HTMLElement | null): void => {
     if (node === null) return;
     const width = hostRef.current?.clientWidth ?? 0;
-    const card = Math.min(560, Math.max(0, width - 16));
+    const card = outputCardWidth(width);
     hoverLeft.current[entry] = Math.max(8, Math.min(node.offsetLeft, width - card - 8));
+  };
+
+  /**
+   * 把卡的左缘夹回条内。
+   *
+   * 悬停时量到的左缘是按**当时**的卡宽夹的；字号之后又变大，卡就宽了——
+   * 每帧渲染时按当前字号再夹一次，右缘永远不会探出条外。
+   */
+  const clampCardLeft = (raw: number): number => {
+    const width = hostRef.current?.clientWidth ?? 0;
+    if (width <= 0) return Math.max(8, raw);
+    return Math.max(8, Math.min(raw, width - outputCardWidth(width) - 8));
   };
 
   /**
@@ -1638,7 +1810,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                   onClosePanel();
                 }}
               >
-                <span aria-hidden="true">{iconGlyph(button.icon)}</span>
+                <span className="__ru_btnIcon" aria-hidden="true">{iconGlyph(button.icon)}</span>
                 <span>{button.label ?? button.entryLabel}</span>
               </button>
             );
@@ -1652,7 +1824,9 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
           run={outputRunOf(runs, props.projectRoot, shownEntry)}
           runtime={runtime}
           pinned={pinnedEntry === shownEntry}
-          left={hoverLeft.current[shownEntry] ?? 12}
+          left={clampCardLeft(hoverLeft.current[shownEntry] ?? 8)}
+          font={props.outputFont}
+          onFont={props.onOutputFont}
           onTogglePin={() => onTogglePin(shownEntry)}
           onPreviewEnter={() => keepHover(shownEntry)}
           onPreviewLeave={scheduleHide}
@@ -1663,12 +1837,12 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
         <button
           type="button"
           className="__ru_btn __ru_fixed"
-          onClick={onCycleDensity}
+          onClick={() => onSetDensity(nextDensityOf(density))}
           title={densityHint}
           aria-label={densityHint}
         >
           {/* 字形恒定（"这是一个控件"的标记），档位靠文字说清楚 */}
-          <span aria-hidden="true">▤</span>
+          <span className="__ru_btnIcon" aria-hidden="true">▤</span>
           <span className="__ru_btnLabel">{densityStateLabel}</span>
         </button>
 
@@ -1709,6 +1883,8 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                 disabled={busy !== null}
                 data-entry={button.entry}
                 data-status={active ? (status ?? 'running') : 'idle'}
+                // 仅图标档下没有文字，胶囊要靠这条属性换成"方形"内边距（见 CSS）。
+                data-icon-only={text.length === 0 ? 'true' : 'false'}
                 onMouseEnter={
                   active
                     ? (event) => {
@@ -1723,7 +1899,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
                   (active ? `（${statusLabel}）` : '')
                 }
               >
-                <span aria-hidden="true">{iconGlyph(button.icon)}</span>
+                <span className="__ru_btnIcon" aria-hidden="true">{iconGlyph(button.icon)}</span>
                 {text.length > 0 ? <span className="__ru_btnLabel">{text}</span> : null}
                 {active ? <span className="__ru_dot" /> : null}
               </button>
@@ -1755,7 +1931,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
               title={props.lastError}
               aria-label={`${runtime.t('runFailed')}：${props.lastError}`}
             >
-              <span aria-hidden="true">⚠</span>
+              <span className="__ru_btnIcon" aria-hidden="true">⚠</span>
               <span className="__ru_btnLabel">{runtime.t('runFailed')}</span>
             </button>
           ) : null}
@@ -3360,7 +3536,9 @@ function autoPinnedRunEnded(
  *   - `presentation.reveal: "always"` 的条目跑起来那一刻自动钉一次（run.json 承诺的）；
  *     自动钉的长驻卡在进程结束后自己收（见 `autoPinnedRunEnded`）。
  *
- * 尺寸刻意收窄：≤560px 宽、≤250px 高，盖不满条——输出短的时候卡自己就矮。
+ * 尺寸默认收窄：560×250，盖不满条——输出短的时候卡自己就矮。卡头右侧那组
+ * `A− / 字号 / A+` 调输出字号，**整张卡按同一比例缩放**（CSS 里的
+ * `--ru-out-scale`），所以"字变大、窗口还是那么小"不会发生。
  *
  * 数据**不走新通路**：宿主 800ms 把终端新切出来的行抄进 `RunRecord.tail`
  * （留最近 200 行），界面 2.5 秒一轮的 `/state` 顺手带回（≈2.5 秒一批）。
@@ -3395,29 +3573,95 @@ interface RunPreviewCardProps {
   pinned: boolean;
   /** 卡片左缘（px，相对 `__ru_host`；已夹在条的宽度以内）。 */
   left: number;
+  /**
+   * 输出字号（px）。缺省 = 默认档。
+   *
+   * `onFont` 没给就不画那组字号钮（离线渲染/Layout 迁移时只关心卡长什么样）。
+   */
+  font?: number;
+  onFont?(next: number): void;
   onTogglePin(): void;
   onPreviewEnter(): void;
   onPreviewLeave(): void;
 }
 
+/**
+ * 输出字号的三颗钮：`A−` / 当前档位 / `A+`。
+ *
+ * 位置在卡头右侧、图钉的左边——"这张卡怎么显示"是同一组事。中间那颗显示当前
+ * 字号、点一下恢复默认档（比再给一颗"重置"更省地方，也不会被误认成标签）；
+ * 加减到头时按钮变灰，而不是悄悄什么都不做。
+ *
+ * 字号以 px 直接写出来（`12` 就是 12px），一眼能对上终端里看到的字大小。
+ */
+function OutputFontStepper(props: {
+  font: number;
+  runtime: Runtime;
+  onFont(next: number): void;
+}): React.ReactElement {
+  const { font, runtime, onFont } = props;
+  return (
+    <span className="__ru_fontBox" role="group" aria-label={runtime.t('outputFontGroup')}>
+      <button
+        type="button"
+        className="__ru_fontBtn"
+        onClick={() => onFont(font - 1)}
+        disabled={font <= OUTPUT_FONT_MIN}
+        title={runtime.t('outputFontSmaller')}
+        aria-label={runtime.t('outputFontSmaller')}
+      >
+        A−
+      </button>
+      <button
+        type="button"
+        className="__ru_fontValue"
+        onClick={() => onFont(OUTPUT_FONT_DEFAULT)}
+        title={runtime.t('outputFontReset')}
+        aria-label={runtime.t('outputFontReset')}
+      >
+        {font}
+      </button>
+      <button
+        type="button"
+        className="__ru_fontBtn"
+        onClick={() => onFont(font + 1)}
+        disabled={font >= OUTPUT_FONT_MAX}
+        title={runtime.t('outputFontLarger')}
+        aria-label={runtime.t('outputFontLarger')}
+      >
+        A+
+      </button>
+    </span>
+  );
+}
+
 function RunPreviewCard(props: RunPreviewCardProps): React.ReactElement {
-  const { run, runtime, pinned, left, onTogglePin, onPreviewEnter, onPreviewLeave } = props;
+  const { run, runtime, pinned, left, onFont, onTogglePin, onPreviewEnter, onPreviewLeave } = props;
+  const font = clampOutputFont(props.font);
+  // 字号与缩放比走自定义属性：CSS 里 `.__ru_outView` 的字号、卡的宽高全从这两个变量算，
+  // 组件这边只负责"现在是第几档"。断言是给 TS 看的——CSSProperties 不收自定义属性名。
+  const style = {
+    left,
+    [OUTPUT_FONT_VAR]: `${font}px`,
+    [OUTPUT_CARD_SCALE_VAR]: `${outputCardScale(font)}`,
+  } as React.CSSProperties;
   return (
     <div
       className={pinned ? '__ru_pop __ru_hover __ru_hoverPinned' : '__ru_pop __ru_hover'}
-      style={{ left }}
+      style={style}
       onMouseEnter={onPreviewEnter}
       onMouseLeave={onPreviewLeave}
     >
       <div className="__ru_hoverHead">
         <span className="__ru_hoverLabel">{run?.label ?? '—'}</span>
-        {/* 状态徽章就贴在脚本名旁边（圈一圈的胶囊）；名字右边由弹簧占位，把图钉推到最右。 */}
+        {/* 状态徽章就贴在脚本名旁边（圈一圈的胶囊）；名字右边由弹簧占位，把钮都推到最右。 */}
         {run !== undefined ? (
           <span className="__ru_statusBadge" data-status={run.status}>
             {runtime.t(run.status)}
           </span>
         ) : null}
         <span className="__ru_hoverSpring" aria-hidden="true" />
+        {onFont !== undefined ? <OutputFontStepper font={font} runtime={runtime} onFont={onFont} /> : null}
         {/* 图钉 + 状态文字：未钉 = 📌 钉住（"把这颗钉按下去"），已钉 = 📍 已钉住（钉在原地）。
             上一版两个 emoji 不带文字，谁读成"钉住了"全凭联想，看起来就像状态反了；
             现在文字把状态说死，钉住的卡另有品牌色描边（__ru_hoverPinned）兜底。
@@ -3457,12 +3701,15 @@ function RunPreviewCard(props: RunPreviewCardProps): React.ReactElement {
 
 function SettingsPanel(props: BarProps): React.ReactElement {
   const { runtime, density, capabilities, hostVersion, configSource, warnings, onClosePanel } = props;
-  const [saving, setSaving] = React.useState(false);
 
-  const choose = async (next: ButtonDensity): Promise<void> => {
-    setSaving(true);
-    await call('/density', 'POST', { density: next });
-    setSaving(false);
+  /**
+   * 选一档密度：走 `onSetDensity`（壳里先改本地再写回 host）。
+   *
+   * 早先这里是"自己 POST，然后等下一轮轮询把新档位带回来"——点下去到高亮
+   * 换过来之间最多差 2.5 秒，看起来像点了没反应。
+   */
+  const choose = (next: ButtonDensity): void => {
+    props.onSetDensity(next);
   };
 
   const options: Array<{ value: ButtonDensity; label: string }> = [
@@ -3496,8 +3743,7 @@ function SettingsPanel(props: BarProps): React.ReactElement {
             type="button"
             key={option.value}
             className={density === option.value ? '__ru_option __ru_optionOn' : '__ru_option'}
-            disabled={saving}
-            onClick={() => void choose(option.value)}
+            onClick={() => choose(option.value)}
           >
             {option.label}
           </button>
@@ -3606,6 +3852,54 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
    */
   const autoPinnedRef = React.useRef(false);
   const [density, setDensity] = React.useState<ButtonDensity>('full');
+  /**
+   * 本地刚点下去、还没被 host 确认的密度；null = 没有待确认的改动。
+   *
+   * 这就是"点一下切到完整信息，过几秒自己跳回仅图标"的修法：`/state` 每 2.5 秒
+   * 回来一次，早先无条件用 `layout.density` 覆盖本地，于是刚点的档位被旧值盖回去。
+   * 详见 `densityFromPoll`。
+   */
+  const densityPendingRef = React.useRef<ButtonDensity | null>(null);
+  /** 输出卡字号（px）：浏览器本地记住，不进 layout.json（那要宿主加路由 + 重启）。 */
+  const [outputFont, setOutputFont] = React.useState<number>(() => readStoredOutputFont());
+
+  /** 采纳轮询回来的密度（本地有待确认的改动且 host 还没跟上时保持不动）。 */
+  const applyPolledDensity = React.useCallback((polled: ButtonDensity | undefined): void => {
+    const next = densityFromPoll(polled, densityPendingRef.current);
+    if (next === null) return;
+    densityPendingRef.current = null;
+    setDensity(next);
+  }, []);
+
+  /**
+   * 改密度：**先本地、再写回 host**，两件事一起做。
+   *
+   * - 只改本地 → 下一轮 2.5 秒的 `/state` 把旧档位带回来，就是"点了一下又自己跳回去"；
+   * - 只写回 host → 要等下一轮轮询才生效，点下去像是没反应。
+   *
+   * 写回失败也不弹回本地：这一页里用户点的档位说了算（刷新页面再回到 host 记着的那档），
+   * 失败这件事只留一条诊断，不打断操作。
+   */
+  const commitDensity = React.useCallback((next: ButtonDensity): void => {
+    densityPendingRef.current = next;
+    setDensity(next);
+    void (async () => {
+      const result = await call('/density', 'POST', { density: next });
+      if (!result.ok) {
+        reportKeyed(`density-save-failed:${next}`, 'density-save-failed', {
+          density: next,
+          message: result.message,
+        });
+      }
+    })();
+  }, []);
+
+  /** 改输出卡字号：收敛到可用档位并记住（纯界面偏好，不发请求）。 */
+  const changeOutputFont = React.useCallback((next: number): void => {
+    const font = clampOutputFont(next);
+    setOutputFont(font);
+    rememberOutputFont(font);
+  }, []);
 
   const pull = React.useCallback(async (): Promise<RunDeckState | null> => {
     // cwd 拿得到就带上（等价于直接指定项目），拿不到就只报 sessionId，
@@ -3664,7 +3958,7 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
         const again = await pullState(cwd, sessionId ?? null);
         if (again.ok) {
           setState(again);
-          if (again.layout.density !== undefined) setDensity(again.layout.density);
+          applyPolledDensity(again.layout.density);
           settleAutoPin(again);
           return again;
         }
@@ -3672,10 +3966,10 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       }
     }
     setState(result);
-    if (result.layout.density !== undefined) setDensity(result.layout.density);
+    applyPolledDensity(result.layout.density);
     settleAutoPin(result);
     return result;
-  }, [ctx, sessionId]);
+  }, [ctx, sessionId, applyPolledDensity]);
 
   /**
    * 轮询。**拿到焦点前用快节奏**：DSH 刚启动的那一两秒里，这个会话还没进
@@ -3715,10 +4009,6 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
   }, [pull]);
 
   if (state === null) return null;
-
-  const cycle: ButtonDensity[] = ['full', 'compact', 'icon'];
-  const nextDensity = (): ButtonDensity =>
-    cycle[(cycle.indexOf(density) + 1) % cycle.length] ?? 'full';
 
   /**
    * 真正发起一次运行（填值面板的「跑」也走这里，值随请求带给 host）。
@@ -3788,7 +4078,9 @@ function FloatingBarHost(props: HostProps): React.ReactElement | null {
       onClosePanel={() => setPanel('none')}
       lastError={lastError}
       onOpenOverflow={() => setPanel('overflow')}
-      onCycleDensity={() => setDensity(nextDensity())}
+      onSetDensity={commitDensity}
+      outputFont={outputFont}
+      onOutputFont={changeOutputFont}
       onOpenAdd={() => setPanel(panel === 'add' ? 'none' : 'add')}
       onOpenManage={() => setPanel(panel === 'manage' ? 'none' : 'manage')}
       onOpenEdit={(entryId) => {
@@ -3966,6 +4258,15 @@ export default Object.assign(plugin, {
     FloatingBarHost,
     InputPromptPanel,
     ManagePanel,
+    OUTPUT_CARD_BASE_HEIGHT,
+    OUTPUT_CARD_BASE_WIDTH,
+    OUTPUT_CARD_SCALE_VAR,
+    OUTPUT_FONT_DEFAULT,
+    OUTPUT_FONT_KEY,
+    OUTPUT_FONT_MAX,
+    OUTPUT_FONT_MIN,
+    OUTPUT_FONT_VAR,
+    OutputFontStepper,
     POPUP_OFFSET,
     POPUP_SPACE_VAR,
     RunPreviewCard,
@@ -3973,7 +4274,9 @@ export default Object.assign(plugin, {
     STACK_LIFT_RULE,
     ansiSpans,
     autoPinnedRunEnded,
+    clampOutputFont,
     cwdOfSession,
+    densityFromPoll,
     dropIndexFor,
     entryNeedsInputs,
     iconGlyph,
@@ -3981,10 +4284,13 @@ export default Object.assign(plugin, {
     labelFor,
     moveInOrder,
     openReadyUrl,
+    outputCardScale,
     parseEnvLines,
     popupSpaceFor,
     previewOffsets,
     quoteArgument,
+    readStoredOutputFont,
+    rememberOutputFont,
     restTops,
     truncate,
     EN,
