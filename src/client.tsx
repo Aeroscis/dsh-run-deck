@@ -1201,13 +1201,19 @@ function reportGeometry(): void {
 
     // 当前档位 + 一个胶囊的**实际**尺寸：紧凑档的 CSS 有没有真的生效，
     // 只能这样看（"完整和紧凑长得一样"就是靠这个查出来的）。
+    // 图标那一格也一起量：三档的字号与图标尺寸必须一致，就看这两个数对不对得上。
     const barElement = root.querySelector('.__ru_bar');
     const chipElement = root.querySelector('.__ru_bar .__ru_btn');
+    const chipIcon = chipElement?.querySelector('.__ru_btnIcon') ?? null;
     const density = {
       marker: barElement?.getAttribute('data-density') ?? null,
       chipHeight: chipElement === null ? null : getComputedStyle(chipElement).height,
       chipFont: chipElement === null ? null : getComputedStyle(chipElement).fontSize,
       chipPadding: chipElement === null ? null : getComputedStyle(chipElement).paddingLeft,
+      chipIcon:
+        chipIcon === null
+          ? null
+          : `${getComputedStyle(chipIcon).width}x${getComputedStyle(chipIcon).height}`,
     };
 
     // 层叠实测：弹层 vs 宿主「回到底部」圆钮（见 probeStacking 的注释）。
@@ -1218,7 +1224,7 @@ function reportGeometry(): void {
       (rows ?? [])
         .map((row) => `${row.what}@${row.top}-${row.bottom}w${row.width}/${row.bg}/${row.radius}`)
         .join('|') +
-      `#${density.marker}/${density.chipHeight}/${density.chipFont}` +
+      `#${density.marker}/${density.chipHeight}/${density.chipFont}/${density.chipIcon}` +
       // 层叠那段只放**稳定的结论**进指纹：rect 会随滚动抖，塞进来只会刷屏
       `#stack:${stack === null ? 'null' : `${stack.popupOpen}/${stack.button === null ? 'noButton' : 'button'}/${stack.verdict}`}`;
     if (signature === geometrySignature) return;
