@@ -4,7 +4,7 @@
 
 发布渠道：npm [`@aeroscis/dsh-run-deck`](https://www.npmjs.com/package/@aeroscis/dsh-run-deck) · 源码 <https://github.com/Aeroscis/dsh-run-deck>
 
-## [未发布]
+## [0.1.3] - 2026-11-18
 
 ### 新增
 
