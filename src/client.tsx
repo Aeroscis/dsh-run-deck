@@ -1913,7 +1913,7 @@ function FloatingBar(props: BarProps): React.ReactElement | null {
               title={props.lastError}
               aria-label={`${runtime.t('runFailed')}：${props.lastError}`}
             >
-              <span aria-hidden="true">⚠</span>
+              <span className="__ru_btnIcon" aria-hidden="true">⚠</span>
               <span className="__ru_btnLabel">{runtime.t('runFailed')}</span>
             </button>
           ) : null}
